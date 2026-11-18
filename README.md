@@ -114,6 +114,7 @@ The tab has:
 - a table with each variable's layers and its full longest chain;
 - with an area (`--target` or `--area`), a second number per variable: the longest chain that **ends in the area**, e.g. `--area ICAN`;
 - **Inputs into the area**: the variables outside it that its equations use directly, and which area variables each one feeds. Everything else outside reaches the area only through these;
+- **What the area feeds outside**: the variables outside it whose equations use an area variable directly, which area variables each uses, and its gap. One step only, not traced further. With `--target`, these are listed even though they're dropped from the rest of the report.
 - **Layer maps**, three of them by complexity. **Map 1** is the core: variables with 5+ layers (the cut-offs adjust). **Map 2** is the next tier (3–4 layers) that Map 1 feeds directly. **Map 3** is the rest (1–2 layers) fed by Map 2. Dashed boxes on the left of a map are the variables from the map above that feed it. Click a box to narrow the next maps to what that variable reaches; double-click for its details. Each map shows up to 200 boxes (adjustable), keeping those with the most layers and largest gaps. Scroll to zoom, drag to move.
 
 With `--target`, layers are counted on the full model before variables are dropped, so the overall numbers stay true.

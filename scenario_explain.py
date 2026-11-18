@@ -3217,6 +3217,11 @@ def cmd_layers(M, args):
         for p in sorted(feeds, key=lambda p: (-len(feeds[p]), p))[:args.n]:
             ts = sorted(feeds[p])
             print('  %-26s -> %3d  %s%s' % (p, len(ts), ', '.join(ts[:6]), ', ...' if len(ts) > 6 else ''))
+        outs = getattr(args, 'area_out', None) or []
+        print('\n%d variables outside %s use it directly (one step, not traced further):' % (len(outs), alab))
+        for o, ts, g in outs[:args.n]:
+            print('  %-26s <- %3d  gap at end %s  uses %s%s' % (o, len(ts), '   n/a' if g is None else '%+6.2f%%' % g,
+                                                           ', '.join(ts[:6]), ', ...' if len(ts) > 6 else ''))
 
 
 def cmd_check(M, args):
@@ -3350,7 +3355,7 @@ def _layers_data(args, nodes):
     return {'d': [L.get(n, z)[0] for n in nodes], 'da': [L.get(n, z)[1] for n in nodes],
             'lp': [L.get(n, z)[4] for n in nodes], 'nx': nx, 'nxa': nxa,
             'xd': {n: [L[n][0], L[n][1]] for n in extra if n in L},
-            'area': names, 'label': label,
+            'area': names, 'label': label, 'out': getattr(args, 'area_out', None),
             'max': max((v[0] for v in L.values()), default=0),
             'nall': len(L), 'pruned': bool(getattr(args, 'target', None))}
 
@@ -3565,6 +3570,7 @@ def build_data(M, args, eqstats, serve=False):
                  'eqs': dict(eqstats) if eqstats else None, 'has_eqs': M.has_eqs,
                  'generated': datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
                  'open': getattr(args, 'open_view', None),
+                 'target_exog': bool(getattr(args, 'target_exog', False)),
                  'adj_thr': M.adj_threshold, 'embedded': len(emb), 'serve': serve,
                  'af_suffix': ','.join(M.af_suffixes), 'n_af': len(M.af_series), 'geo_sep': M.geo_sep,
                  'exog': sorted(M.exog)},
@@ -4450,7 +4456,7 @@ let KC={};
  let h=`<div class="hint"><b>Layers</b> = the longest chain of equations from a variable downstream: 0 = no equation uses it; 3 = it feeds a variable that feeds a variable that feeds a variable. A loop (e.g. GDP → income → consumption → GDP) counts as <b>one</b> layer, since inside a loop the chain never ends. Lags count as links. This is the model's structure, not the size of an effect.${Y.pruned?` Counted on the full model before <code>--target</code> dropped variables.`:''}</div>`;
  h+=`<div class="ctl">${AREA?`<label>Measure <select id="lm"><option value="0">longest chain, anywhere</option><option value="1">longest chain ending in ${esc(AL)}</option></select></label>`:''} <input type="text" id="lq" placeholder="filter names, e.g. _ICAN or FGDP"> <label><input type="checkbox" id="lc"> changed only</label></div>
  <div id="lh"></div><div id="lch"></div><div class="tw"><table><thead><tr><th>Variable</th><th>Type</th><th class="n">Layers</th>${AREA?`<th class="n">Into ${esc(AL)}</th>`:''}<th class="n">Used directly by</th><th class="n">Gap at end</th><th>Longest chain</th></tr></thead><tbody id="lt"></tbody></table></div><div id="lmore"></div>`;
- if(AREA){h+=`<h2>Inputs into ${esc(AL)}</h2><div id="lin"></div>`}
+ if(AREA){h+=`<h2>Inputs into ${esc(AL)}</h2><div id="lin"></div>`;if(Y.out)h+=`<h2>What ${esc(AL)} feeds outside</h2><div id="lout"></div>`}
  h+=`<h2>Layer maps</h2><div class="hint">The model in three maps by complexity. <b>Map 1</b> is the core: variables whose longest chain has the most layers. <b>Map 2</b> shows the next tier that Map 1 feeds directly, <b>Map 3</b> the tier after that, fed by Map 2. Dashed boxes on the left of a map are the variables from the map above that feed it. Click a box to narrow the next map to what that variable reaches (click again, or ✕, to clear); double-click for its details. In each map, columns are layers (most layers on the left), arrows are equations, colour is the gap at the end (green up, red down, grey unchanged). Scroll to zoom, drag to move.</div>
  <div class="ctl">Map 1: layers ≥ <input type="number" id="t1" min="2" style="width:60px"> &nbsp; Map 2: layers ≥ <input type="number" id="t2" min="1" style="width:60px"> &nbsp; Map 3: the rest (≥ 1) &nbsp; <label>max boxes per map <input type="number" id="mn" value="200" min="20" max="3000" step="50" style="width:80px"></label> <label><input type="checkbox" id="mlink" checked> only variables linked to the map above</label></div>
  ${[1,2,3].map(k=>`<h3 id="mh${k}"></h3><div class="ctl"><span id="mf${k}"></span> <span class="zb"><button class="btn" data-lz${k}="in">+</button><button class="btn" data-lz${k}="out">−</button><button class="btn" data-lz${k}="reset">reset</button></span></div><div id="mnote${k}" class="hint"></div><div id="lmap${k}"></div>`).join('')}`;
@@ -4478,6 +4484,9 @@ let KC={};
   const ks=Object.keys(feeds).sort((x,y)=>feeds[y].length-feeds[x].length||(x<y?-1:1)),fed=new Set(Object.values(feeds).flat());
   $('#lin').innerHTML=`<div class="hint"><b>${ks.length.toLocaleString()}</b> variables outside ${esc(AL)} are used directly in its equations; ${fed.size.toLocaleString()} of its ${Y.area.length.toLocaleString()} variables use at least one. Everything else outside reaches ${esc(AL)} only through these.</div>
   <div class="tw"><table><thead><tr><th>Input</th><th>Type</th><th class="n">Gap at end</th><th class="n">${esc(AL)} variables using it</th><th>Which</th></tr></thead><tbody>${ks.map(p=>{const r=ROW[p],g=gapOf(p),ts=feeds[p].sort();return `<tr><td>${vlink(p)}</td><td>${badge(r?r[9]:(D.par[NI[p]].length?'E':'X'),p)}</td><td class="n ${cls(g)}">${g==null?'unchanged':pct(g)}</td><td class="n">${ts.length}</td><td class="small">${ts.slice(0,12).map(vlink).join(', ')}${ts.length>12?` … and ${ts.length-12} more`:''}</td></tr>`}).join('')}</tbody></table></div>`}
+ if(AREA&&Y.out){const O=Y.out,usedBy=new Set(O.flatMap(o=>o[1]));
+  $('#lout').innerHTML=`<div class="hint"><b>${O.length.toLocaleString()}</b> variables outside ${esc(AL)} use it directly in their equations; ${usedBy.size.toLocaleString()} of its ${Y.area.length.toLocaleString()} variables are used outside. One step only: what those variables feed in turn is not traced.${Y.pruned?' Variables dropped by <code>--target</code> are listed without details.':''}${M.target_exog?` With <code>--target-exog</code> these do not feed back into ${esc(AL)}.`:''}</div>
+  ${O.length?`<div class="tw"><table><thead><tr><th>Variable outside</th><th class="n">Gap at end</th><th class="n">${esc(AL)} variables it uses</th><th>Which</th></tr></thead><tbody>${O.map(([o,ts,g])=>`<tr><td>${NI[o]!=null?vlink(o):esc(o)}</td><td class="n ${cls(g)}">${g==null?'–':Math.abs(g)<1e-9?'unchanged':pct(g)}</td><td class="n">${ts.length}</td><td class="small">${ts.slice(0,12).map(vlink).join(', ')}${ts.length>12?` … and ${ts.length-12} more`:''}</td></tr>`).join('')}</tbody></table></div>`:''}`}
  // layer maps in three tiers
  const LVS={1:{},2:{},3:{}},FOC={1:null,2:null};
  const mxL=Math.max(1,Y.max);$('#t1').value=mxL>=6?5:Math.max(2,Math.ceil(mxL*0.6));$('#t2').value=+$('#t1').value>=5?3:Math.max(1,+$('#t1').value-1);
@@ -4830,6 +4839,7 @@ def build_model(args):
     t1 = time.time()
     args.layers = compute_layers(lp, area)
     args.layers_area = (sorted(area) if area else None, area_label)
+    args.area_out = _area_outputs(area, eqs, eqs_b, exog_names, A, B) if area else None
     say('Layers: longest chain %d%s, %d variables in %.1fs'
         % (max((v[0] for v in args.layers.values()), default=0),
            (', into %s %s' % (area_label, max((v[1] for v in args.layers.values() if v[1] is not None), default=0)))
@@ -4920,6 +4930,33 @@ def layer_chain(L, n, area=False, limit=60):
             break
         out.append(nxt)
     return out
+
+
+def _area_outputs(area, eqs, eqs_b, exog, A, B):
+    """Variables outside the area whose equations use an area variable directly (one step, no tracing),
+    with the area variables each one uses and its gap B - A (%) in the last period both scenarios have."""
+    area = set(area)
+    outs = defaultdict(set)
+    for E in (eqs, eqs_b or {}):
+        for n, e in E.items():
+            if n in area or n in exog:
+                continue
+            for d in e.drivers:
+                if d in area:
+                    outs[n].add(d)
+
+    def last_gap(n):
+        if n not in A.series or n not in B.series:
+            return None
+        (ba, xa), (bb, xb) = A.series[n], B.series[n]
+        va = {k: v for k, v in zip(A.blocks[ba], xa) if v == v}
+        vb = {k: v for k, v in zip(B.blocks[bb], xb) if v == v}
+        ks = sorted(set(va) & set(vb))
+        if not ks:
+            return None
+        a, b = va[ks[-1]], vb[ks[-1]]
+        return 0.0 if a == b else ((b - a) / abs(a) * 100 if a else None)
+    return [[n, sorted(ts), last_gap(n)] for n, ts in sorted(outs.items(), key=lambda kv: (-len(kv[1]), kv[0]))]
 
 
 def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say, outside_exog=False):
