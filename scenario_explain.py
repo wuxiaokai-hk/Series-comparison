@@ -4451,8 +4451,9 @@ let KC={};
  h+=`<div class="ctl">${AREA?`<label>Measure <select id="lm"><option value="0">longest chain, anywhere</option><option value="1">longest chain ending in ${esc(AL)}</option></select></label>`:''} <input type="text" id="lq" placeholder="filter names, e.g. _ICAN or FGDP"> <label><input type="checkbox" id="lc"> changed only</label></div>
  <div id="lh"></div><div id="lch"></div><div class="tw"><table><thead><tr><th>Variable</th><th>Type</th><th class="n">Layers</th>${AREA?`<th class="n">Into ${esc(AL)}</th>`:''}<th class="n">Used directly by</th><th class="n">Gap at end</th><th>Longest chain</th></tr></thead><tbody id="lt"></tbody></table></div><div id="lmore"></div>`;
  if(AREA){h+=`<h2>Inputs into ${esc(AL)}</h2><div id="lin"></div>`}
- h+=`<h2>Layer map</h2><div class="hint">Columns are layers: the variables that drive the most layers are on the left, those that feed nothing on the right. Arrows are equations. <b>At least</b> shows the model's backbone; <b>exactly</b> shows those variables with their longest chains. Colour = gap B − A at the end (green up, red down, grey unchanged). Scroll to zoom, drag to move, click a box for details.</div>
- <div class="ctl"><label>Layers <select id="mmode"><option value="ge">at least</option><option value="eq">exactly</option></select></label> <input type="range" id="md" min="1" max="${Math.max(1,Y.max)}" value="${Math.min(4,Math.max(1,Y.max))}"> <b id="mdv"></b> <label>max boxes <input type="number" id="mn" value="250" min="20" max="3000" step="50" style="width:80px"></label> <span class="zb"><button class="btn" data-lz="in">+</button><button class="btn" data-lz="out">−</button><button class="btn" data-lz="reset">reset</button></span></div><div id="mnote" class="hint"></div><div id="lmap"></div>`;
+ h+=`<h2>Layer maps</h2><div class="hint">The model in three maps by complexity. <b>Map 1</b> is the core: variables whose longest chain has the most layers. <b>Map 2</b> shows the next tier that Map 1 feeds directly, <b>Map 3</b> the tier after that, fed by Map 2. Dashed boxes on the left of a map are the variables from the map above that feed it. Click a box to narrow the next map to what that variable reaches (click again, or ✕, to clear); double-click for its details. In each map, columns are layers (most layers on the left), arrows are equations, colour is the gap at the end (green up, red down, grey unchanged). Scroll to zoom, drag to move.</div>
+ <div class="ctl">Map 1: layers ≥ <input type="number" id="t1" min="2" style="width:60px"> &nbsp; Map 2: layers ≥ <input type="number" id="t2" min="1" style="width:60px"> &nbsp; Map 3: the rest (≥ 1) &nbsp; <label>max boxes per map <input type="number" id="mn" value="200" min="20" max="3000" step="50" style="width:80px"></label> <label><input type="checkbox" id="mlink" checked> only variables linked to the map above</label></div>
+ ${[1,2,3].map(k=>`<h3 id="mh${k}"></h3><div class="ctl"><span id="mf${k}"></span> <span class="zb"><button class="btn" data-lz${k}="in">+</button><button class="btn" data-lz${k}="out">−</button><button class="btn" data-lz${k}="reset">reset</button></span></div><div id="mnote${k}" class="hint"></div><div id="lmap${k}"></div>`).join('')}`;
  $('#t-lay').innerHTML=h;
  let LIM=300;
  const meas=()=>AREA&&$('#lm')&&$('#lm').value==='1';
@@ -4470,47 +4471,64 @@ let KC={};
  $('#t-lay').addEventListener('click',e=>{if(e.target.closest('a'))return;const r=e.target.closest('[data-lr]');if(r){const n=r.dataset.lr,a=meas(),i=NI[n];
    $('#lch').innerHTML=`<div class="card"><b>${esc(n)}</b>: ${val(i,a)} layers${a?` into ${esc(AL)}`:''}. Longest chain:<div style="margin-top:6px">${chainHTML(n,a)}</div>${!a&&AREA&&Y.da[i]!=null&&Y.da[i]!==Y.d[i]?`<div class="hint" style="margin-top:6px">Longest chain ending in ${esc(AL)} (${Y.da[i]} layers): ${chainHTML(n,true)}</div>`:''}</div>`;$('#lch').scrollIntoView({block:'nearest'});return}
   const k=e.target.closest('[data-lk]');if(k){only=+k.dataset.lk;LIM=300;table()}});
- ['#lq','#lc'].forEach(s=>$(s).addEventListener('input',()=>{LIM=300;table()}));if($('#lm'))$('#lm').addEventListener('input',()=>{only=null;LIM=300;refresh();drawMap()});
+ ['#lq','#lc'].forEach(s=>$(s).addEventListener('input',()=>{LIM=300;table()}));if($('#lm'))$('#lm').addEventListener('input',()=>{only=null;LIM=300;refresh();FOC[1]=FOC[2]=null;drawMaps()});
  refresh();
  // inputs into the area: variables outside it that its equations use directly
  if(AREA){const feeds={};Y.area.forEach(t=>{const i=NI[t];if(i==null)return;D.par[i].forEach(p=>{const pn=D.nodes[p];if(!AREA.has(pn))(feeds[pn]=feeds[pn]||[]).push(t)})});
   const ks=Object.keys(feeds).sort((x,y)=>feeds[y].length-feeds[x].length||(x<y?-1:1)),fed=new Set(Object.values(feeds).flat());
   $('#lin').innerHTML=`<div class="hint"><b>${ks.length.toLocaleString()}</b> variables outside ${esc(AL)} are used directly in its equations; ${fed.size.toLocaleString()} of its ${Y.area.length.toLocaleString()} variables use at least one. Everything else outside reaches ${esc(AL)} only through these.</div>
   <div class="tw"><table><thead><tr><th>Input</th><th>Type</th><th class="n">Gap at end</th><th class="n">${esc(AL)} variables using it</th><th>Which</th></tr></thead><tbody>${ks.map(p=>{const r=ROW[p],g=gapOf(p),ts=feeds[p].sort();return `<tr><td>${vlink(p)}</td><td>${badge(r?r[9]:(D.par[NI[p]].length?'E':'X'),p)}</td><td class="n ${cls(g)}">${g==null?'unchanged':pct(g)}</td><td class="n">${ts.length}</td><td class="small">${ts.slice(0,12).map(vlink).join(', ')}${ts.length>12?` … and ${ts.length-12} more`:''}</td></tr>`}).join('')}</tbody></table></div>`}
- // layer map
- const LV={v:null,full:null};
- function drawMap(){const a=meas(),d=+$('#md').value,mode=$('#mmode').value,cap=Math.max(20,+$('#mn').value||250);$('#mdv').textContent=d;
-  let pick=[];for(let i=0;i<N;i++){const v=val(i,a);if(v==null)continue;if(mode==='ge'?v>=d:v===d)pick.push(i)}
-  const total=pick.length;pick.sort((x,y)=>val(y,a)-val(x,a)||Math.abs(gapOf(D.nodes[y])||0)-Math.abs(gapOf(D.nodes[x])||0)||CH[y].length-CH[x].length);pick=pick.slice(0,cap);
-  const sel=new Set(pick);
-  if(mode==='eq'){pick.slice().forEach(i=>chain(D.nodes[i],a).forEach(n=>{const j=NI[n];if(j!=null&&!sel.has(j)&&sel.size<cap*3){sel.add(j)}}))}
-  const ids=[...sel];
-  $('#mnote').textContent=total?`${total.toLocaleString()} variables with ${mode==='ge'?'at least':'exactly'} ${d} layers${total>cap?`; showing the ${cap} with the most layers and largest gaps`:''}${mode==='eq'?`, plus the variables on their longest chains`:''} (${ids.length} boxes).`:`No variable has ${mode==='ge'?'at least':'exactly'} ${d} layers.`;
-  if(!ids.length){$('#lmap').innerHTML='';return}
-  const lay=i=>val(i,a),cols={};ids.forEach(i=>(cols[lay(i)]=cols[lay(i)]||[]).push(i));
-  const ks=Object.keys(cols).map(Number).sort((x,y)=>y-x),ci={};ks.forEach((k,j)=>ci[k]=j);
-  const pos={};ks.forEach(k=>cols[k].forEach((i,r)=>pos[i]=r));
-  const inS=i=>D.par[i].filter(p=>sel.has(p));
-  for(let sweep=0;sweep<3;sweep++)ks.forEach((k,j)=>{if(!j)return;cols[k].sort((x,y)=>{const m=z=>{const ps=inS(z);return ps.length?ps.reduce((s,p)=>s+pos[p],0)/ps.length:1e9};return m(x)-m(y)});cols[k].forEach((i,r)=>pos[i]=r)});
-  const BW=150,BH=26,GX=90,SX=14,GY=8,R=Math.max(12,Math.min(40,Math.ceil(Math.sqrt(ids.length)*1.6)));
-  const nsub={},x0={};let xc=10;ks.forEach(k=>{nsub[k]=Math.max(1,Math.ceil(cols[k].length/R));x0[k]=xc;xc+=nsub[k]*(BW+SX)-SX+GX});
-  const rows=k=>Math.ceil(cols[k].length/nsub[k]),mr=Math.max(...ks.map(rows)),W=xc-GX+20,H=mr*(BH+GY)+20;
-  const P={};ks.forEach(k=>{const c=cols[k],rk=rows(k),off=(H-rk*(BH+GY))/2+6;c.forEach((i,r)=>P[i]={x:x0[k]+Math.floor(r/rk)*(BW+SX),y:off+(r%rk)*(BH+GY)})});
-  const col=g=>{if(g==null)return'var(--card)';const t=Math.min(1,Math.abs(g)/3);return g<0?`rgba(217,45,32,${.12+.55*t})`:`rgba(15,157,88,${.12+.55*t})`};
-  let ed='';ids.forEach(v=>inS(v).forEach(u=>{const A=P[u],B=P[v];if(!A||!B)return;let dpath;
-   if(A.x<B.x){const x1=A.x+BW,y1=A.y+BH/2,x2=B.x,y2=B.y+BH/2,mx=(x1+x2)/2;dpath=`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
-   else{const x1=A.x+BW,y1=A.y+BH/2,x2=B.x+BW,y2=B.y+BH/2,bx=Math.max(x1,x2)+30;dpath=`M${x1},${y1} C${bx},${y1} ${bx},${y2} ${x2},${y2}`}
-   ed+=`<path d="${dpath}" fill="none" stroke="var(--mut)" stroke-opacity=".35" stroke-width="1" marker-end="url(#la)" data-e="${u},${v}"/>`}));
-  let nd='';ids.forEach(i=>{const n=D.nodes[i],p=P[i],g=gapOf(n);nd+=`<g class="ln" data-v="${esc(n)}" data-i="${i}" style="cursor:pointer"><title>${esc(n)}: ${Y.d[i]} layers${AREA&&Y.da[i]!=null?`, ${Y.da[i]} into ${AL}`:''}${g!=null?`, gap ${pct(g)}`:', unchanged'}${Y.lp[i]>1?`, in a loop of ${Y.lp[i]}`:''}</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${col(g)}" stroke="${inA(n)?'var(--a)':'var(--line)'}" stroke-width="${inA(n)?2:1}"/><text x="${p.x+6}" y="${p.y+17}" font-size="11" fill="var(--fg)">${esc(n.length>22?n.slice(0,21)+'…':n)}</text></g>`});
-  const hd=ks.map(k=>`<text x="${x0[k]}" y="12" font-size="11" fill="var(--mut)">${k} layer${k===1?'':'s'} (${cols[k].length})</text>`).join('');
-  LV.full=[0,-6,W,H+20];LV.v=LV.full.slice();
-  $('#lmap').innerHTML=`<svg id="lsvg" viewBox="${LV.v.join(' ')}" style="width:100%;height:${Math.round(Math.min(720,Math.max(260,($('#t-lay').clientWidth||1100)*(H+20)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="la" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--mut)"/></marker></defs>${hd}${ed}${nd}</svg>`;
-  panZoom($('#lsvg'),LV,'[data-lz]');
-  const sv=$('#lsvg');sv.addEventListener('mouseover',e=>{const g=e.target.closest('.ln');if(!g)return;const i=g.dataset.i;sv.querySelectorAll('path[data-e]').forEach(pth=>{const [u,v]=pth.dataset.e.split(',');const on=u===i||v===i;pth.setAttribute('stroke',on?'var(--a)':'var(--mut)');pth.setAttribute('stroke-opacity',on?'.9':'.35');pth.setAttribute('stroke-width',on?'2':'1')})})}
- ['#md','#mmode','#mn'].forEach(s=>$(s).addEventListener('input',drawMap));
- drawMap();
+ // layer maps in three tiers
+ const LVS={1:{},2:{},3:{}},FOC={1:null,2:null};
+ const mxL=Math.max(1,Y.max);$('#t1').value=mxL>=6?5:Math.max(2,Math.ceil(mxL*0.6));$('#t2').value=+$('#t1').value>=5?3:Math.max(1,+$('#t1').value-1);
+ const col=g=>{if(g==null)return'var(--card)';const t=Math.min(1,Math.abs(g)/3);return g<0?`rgba(217,45,32,${.12+.55*t})`:`rgba(15,157,88,${.12+.55*t})`};
+ const rank=a=>(x,y)=>val(y,a)-val(x,a)||Math.abs(gapOf(D.nodes[y])||0)-Math.abs(gapOf(D.nodes[x])||0)||CH[y].length-CH[x].length;
+ const RC=new Map();function reach(start){if(RC.has(start))return RC.get(start);const seen=new Set(),q=[start];while(q.length){const u=q.pop();for(const v of CH[u])if(!seen.has(v)){seen.add(v);q.push(v)}}RC.set(start,seen);return seen}
+ function draw(k,ids,ghosts,a,note){const el=$('#lmap'+k);$('#mnote'+k).textContent=note;if(!ids.length){el.innerHTML='';return}
+  const sel=new Set(ids),gs=new Set(ghosts),all=new Set([...ids,...ghosts]);
+  const lay=i=>gs.has(i)?Infinity:val(i,a),cols=new Map();[...ghosts,...ids].forEach(i=>{const L=lay(i);if(!cols.has(L))cols.set(L,[]);cols.get(L).push(i)});
+  const ks=[...cols.keys()].sort((x,y)=>y-x),pos={};ks.forEach(L=>cols.get(L).forEach((i,r)=>pos[i]=r));
+  const inS=i=>D.par[i].filter(p=>all.has(p));
+  for(let sw=0;sw<3;sw++)ks.forEach((L,j)=>{if(!j)return;const c=cols.get(L);c.sort((x,y)=>{const m=z=>{const ps=inS(z);return ps.length?ps.reduce((s,p)=>s+pos[p],0)/ps.length:1e9};return m(x)-m(y)});c.forEach((i,r)=>pos[i]=r)});
+  const BW=150,BH=26,GX=90,SX=14,GY=8,R=Math.max(12,Math.min(40,Math.ceil(Math.sqrt(all.size)*1.6)));
+  const nsub={},x0={};let xc=10;ks.forEach(L=>{nsub[L]=Math.max(1,Math.ceil(cols.get(L).length/R));x0[L]=xc;xc+=nsub[L]*(BW+SX)-SX+GX});
+  const rows=L=>Math.ceil(cols.get(L).length/nsub[L]),mr=Math.max(...ks.map(rows)),W=xc-GX+20,H=mr*(BH+GY)+20;
+  const P={};ks.forEach(L=>{const c=cols.get(L),rk=rows(L),off=(H-rk*(BH+GY))/2+6;c.forEach((i,r)=>P[i]={x:x0[L]+Math.floor(r/rk)*(BW+SX),y:off+(r%rk)*(BH+GY)})});
+  let ed='';ids.forEach(v=>inS(v).forEach(u=>{const A=P[u],B=P[v];if(!A||!B)return;let d;
+   if(A.x<B.x){const x1=A.x+BW,y1=A.y+BH/2,x2=B.x,y2=B.y+BH/2,m=(x1+x2)/2;d=`M${x1},${y1} C${m},${y1} ${m},${y2} ${x2},${y2}`}
+   else{const x1=A.x+BW,y1=A.y+BH/2,x2=B.x+BW,y2=B.y+BH/2,bx=Math.max(x1,x2)+30;d=`M${x1},${y1} C${bx},${y1} ${bx},${y2} ${x2},${y2}`}
+   ed+=`<path d="${d}" fill="none" stroke="var(--mut)" stroke-opacity=".35" stroke-width="1" marker-end="url(#la${k})" data-e="${u},${v}"${gs.has(u)?' stroke-dasharray="4 3"':''}/>`}));
+  const foc=FOC[k];let nd='';[...all].forEach(i=>{const n=D.nodes[i],p=P[i],g=gapOf(n),gh=gs.has(i),f=foc===i;
+   nd+=`<g class="ln" data-n="${esc(n)}" data-i="${i}" style="cursor:pointer"><title>${esc(n)}: ${Y.d[i]} layers${AREA&&Y.da[i]!=null?`, ${Y.da[i]} into ${AL}`:''}${g!=null?`, gap ${pct(g)}`:', unchanged'}${Y.lp[i]>1?`, in a loop of ${Y.lp[i]}`:''}${gh?` (from Map ${k-1})`:''}</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${col(g)}" fill-opacity="${gh?.45:1}" stroke="${f?'var(--b)':inA(n)?'var(--a)':'var(--mut)'}" stroke-opacity="${f||inA(n)?1:.4}" stroke-width="${f?3:inA(n)?2:1}"${gh?' stroke-dasharray="4 3"':''}/><text x="${p.x+6}" y="${p.y+17}" font-size="11" fill="var(--fg)">${esc(n.length>22?n.slice(0,21)+'…':n)}</text></g>`});
+  const hd=ks.map(L=>`<text x="${x0[L]}" y="12" font-size="11" fill="var(--mut)">${L===Infinity?`from Map ${k-1} (${cols.get(L).length})`:`${L} layer${L===1?'':'s'} (${cols.get(L).length})`}</text>`).join('');
+  const S=LVS[k];S.full=[0,-6,W,H+20];S.v=S.full.slice();
+  el.innerHTML=`<svg id="lsvg${k}" viewBox="${S.v.join(' ')}" style="width:${Math.min(($('#t-lay').clientWidth||1100),Math.round(W*1.15))}px;max-width:100%;height:${Math.round(Math.min(680,Math.max(120,Math.min(($('#t-lay').clientWidth||1100),W*1.15)*(H+20)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="la${k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--mut)"/></marker></defs>${hd}${ed}${nd}</svg>`;
+  const sv=$('#lsvg'+k);panZoom(sv,S,'[data-lz'+k+']','lz'+k);
+  sv.addEventListener('mouseover',e=>{const g=e.target.closest('.ln');if(!g)return;const i=g.dataset.i;sv.querySelectorAll('path[data-e]').forEach(pth=>{const [u,v]=pth.dataset.e.split(',');const on=u===i||v===i;pth.setAttribute('stroke',on?'var(--a)':'var(--mut)');pth.setAttribute('stroke-opacity',on?'.9':'.35');pth.setAttribute('stroke-width',on?'2':'1')})});
+  sv.addEventListener('click',e=>{const g=e.target.closest('.ln');if(!g||k===3||gs.has(+g.dataset.i))return;const i=+g.dataset.i;FOC[k]=FOC[k]===i?null:i;if(k===1)FOC[2]=null;drawMaps()});
+  sv.addEventListener('dblclick',e=>{const g=e.target.closest('.ln');if(g)show(g.dataset.n)})}
+ function drawMaps(){const a=meas(),cap=Math.max(20,+$('#mn').value||200),link=$('#mlink').checked;
+  let t1=Math.max(2,+$('#t1').value||2),t2=Math.max(1,Math.min(t1-1,+$('#t2').value||1));
+  const tier=(lo,hi)=>{const out=[];for(let i=0;i<N;i++){const v=val(i,a);if(v!=null&&v>=lo&&v<hi)out.push(i)}return out};
+  const T=[null,tier(t1,Infinity),tier(t2,t1),tier(1,t2)],shown={};
+  const label=['',`Map 1 — core: ${t1}+ layers`,`Map 2 — ${t2===t1-1?t2:`${t2}–${t1-1}`} layers`,`Map 3 — ${t2-1<=1?1:`1–${t2-1}`} layer${t2-1===1?'':'s'}`];
+  for(const k of [1,2,3]){$('#mh'+k).textContent=label[k];let ids=T[k],ghosts=[],extra='';
+   if(k>1){const up=new Set(T[k-1]),f=FOC[k-1]!=null?FOC[k-1]:(k===3?FOC[1]:null);
+    if(f!=null){const r=reach(f);ids=ids.filter(i=>r.has(i));extra=` reached from ${D.nodes[f]}`}
+    else if(link){ids=ids.filter(i=>D.par[i].some(p=>up.has(p)))}
+    const cand=ids.slice().sort(rank(a)).slice(0,cap),gc=new Map();
+    cand.forEach(i=>D.par[i].forEach(p=>{if(up.has(p))gc.set(p,(gc.get(p)||0)+1)}));
+    ghosts=[...gc.keys()].sort((x,y)=>gc.get(y)-gc.get(x)).slice(0,40);
+    if(FOC[k-1]!=null&&!ghosts.includes(FOC[k-1]))ghosts.unshift(FOC[k-1])}
+   const total=ids.length;ids=ids.slice().sort(rank(a)).slice(0,cap);shown[k]=ids;
+   {const fk=k>1?(FOC[k-1]!=null?k-1:(k===3&&FOC[1]!=null?1:null)):null;$('#mf'+k).innerHTML=fk!=null?`<span class="badge" style="cursor:pointer" data-cf="${fk}">narrowed to ${esc(D.nodes[FOC[fk]])} ✕</span>`:''}
+   draw(k,ids,ghosts,a,total?`${total.toLocaleString()} variables${extra}${k>1&&!extra&&link?` linked to Map ${k-1}`:''}${total>cap?`; showing the ${cap} with the most layers and largest gaps`:''}.`:`No variables${extra} in this tier.`)}}
+ $('#t-lay').addEventListener('click',e=>{const c=e.target.closest('[data-cf]');if(c){FOC[+c.dataset.cf]=null;if(c.dataset.cf==='1')FOC[2]=null;drawMaps()}});
+ ['#t1','#t2','#mn','#mlink'].forEach(s=>$(s).addEventListener('input',()=>{FOC[1]=FOC[2]=null;drawMaps()}));
+ if($('#lm'))$('#lm').addEventListener('input',()=>RC.clear());
+ drawMaps();
 })();
-function panZoom(sv,S,btnSel){if(!sv)return;const set=()=>sv.setAttribute('viewBox',S.v.join(' '));
+function panZoom(sv,S,btnSel,attr){attr=attr||'lz';if(!sv)return;const set=()=>sv.setAttribute('viewBox',S.v.join(' '));
  const zoomAt=(f,cx,cy)=>{const [x,y,w,h]=S.v,nw=Math.min(S.full[2]*2,Math.max(S.full[2]/40,w*f)),k=nw/w;S.v=[cx-(cx-x)*k,cy-(cy-y)*k,nw,h*k];set()};
  const toSvg=(ex,ey)=>{const r=sv.getBoundingClientRect(),[x,y,w,h]=S.v,sc=Math.max(w/r.width,h/r.height),ox=(r.width*sc-w)/2,oy=(r.height*sc-h)/2;return[x-ox+(ex-r.left)*sc,y-oy+(ey-r.top)*sc,sc]};
  sv.addEventListener('wheel',e=>{e.preventDefault();const [cx,cy]=toSvg(e.clientX,e.clientY);zoomAt(e.deltaY>0?1.15:1/1.15,cx,cy)},{passive:false});
@@ -4519,7 +4537,7 @@ function panZoom(sv,S,btnSel){if(!sv)return;const set=()=>sv.setAttribute('viewB
  window.addEventListener('pointermove',e=>{if(!drag)return;const sc=toSvg(0,0)[2],dx=(e.clientX-drag[0])*sc,dy=(e.clientY-drag[1])*sc;if(Math.abs(dx)+Math.abs(dy)>2)moved=true;S.v=[drag[2][0]-dx,drag[2][1]-dy,drag[2][2],drag[2][3]];set()});
  window.addEventListener('pointerup',()=>{drag=null});
  sv.addEventListener('click',e=>{if(moved){e.stopPropagation();e.preventDefault();moved=false}},true);
- document.querySelectorAll(btnSel).forEach(b=>b.onclick=()=>{const [x,y,w,h]=S.v,z=b.dataset.lz;if(z==='reset'){S.v=S.full.slice();set()}else zoomAt(z==='in'?1/1.3:1.3,x+w/2,y+h/2)})}
+ document.querySelectorAll(btnSel).forEach(b=>b.onclick=()=>{const [x,y,w,h]=S.v,z=b.dataset[attr];if(z==='reset'){S.v=S.full.slice();set()}else zoomAt(z==='in'?1/1.3:1.3,x+w/2,y+h/2)})}
 // ---------- influence
 function infSummary(r,what){return `<div class="kpis"><div class="kpi"><span class="mut small">linked through equations</span><b>${r.reach.toLocaleString()}</b></div><div class="kpi"><span class="mut small">actually move (≥${r.thr}%)</span><b>${r.moved.toLocaleString()}</b></div><div class="kpi"><span class="mut small">move ≥ 1%</span><b>${r.ge1.toLocaleString()}</b></div><div class="kpi"><span class="mut small">0.1–1%</span><b>${r.b01.toLocaleString()}</b></div><div class="kpi"><span class="mut small">${r.thr}–0.1%</span><b>${r.b001.toLocaleString()}</b></div></div>
  <div class="hint">${what}. ${r.resolved.toLocaleString()} equations re-solved${r.blocked?`; ${r.blocked} linked variables have no evaluable equation and were held fixed`:''}. Largest effect over ${esc(M.ws)}–${esc(M.we)}, as % of the scenario-A level:</div>
