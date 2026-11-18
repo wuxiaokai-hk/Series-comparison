@@ -3504,11 +3504,11 @@ def compute_groups(nodes, par, geo=None, boxes=40):
         for v in c:
             order[v] = x
 
-    def label(mem):
+    def label(mem, plab=None):
         if geo:
             c = Counter(geo(nodes[i]) for i in mem)
             g, k = c.most_common(1)[0]
-            if g and k >= 0.6 * len(mem):
+            if g and k >= 0.6 * len(mem) and g != plab:         # inside one region, name by a variable instead
                 return g
         top = max(mem, key=lambda i: (len(nbr[i]), nodes[i]))
         return 'around ' + nodes[top]
@@ -3544,22 +3544,36 @@ def compute_groups(nodes, par, geo=None, boxes=40):
             bins.append(cur)
         return bins
 
+    def regroup(parts):
+        """Too many parts: bundle parts that hang off the same neighbouring parts; then cut into blocks."""
+        where = {}
+        for x, m in enumerate(parts):
+            for v in m:
+                where[v] = x
+        sig = defaultdict(list)
+        for x, m in enumerate(parts):
+            nb = frozenset(where[b] for a in m for b in nbr[a] if b in where and where[b] != x)
+            sig[nb].append(x)
+        groups = sorted(sig.values(), key=lambda xs: (-sum(len(parts[x]) for x in xs), xs[0]))
+        if 1 < len(groups) <= maxp:
+            return [sum((parts[x] for x in xs), []) for xs in groups]
+        ps = sorted(parts, key=lambda m: min(order[v] for v in m))
+        return [sum(b, []) for b in chunk(ps, maxp, size=len)]
+
     def split(members):
-        parts = louvain_parts(members, 1.0)
-        g = 1.0
-        while len(parts) < 2 and g < 64:                       # no split: raise the resolution
-            g *= 2
+        best = None
+        for g in (1.0, 2.0, 4.0, 8.0, 16.0, 32.0):            # tune the resolution: prefer balanced splits
             parts = louvain_parts(members, g)
-        g = 1.0
-        while len(parts) > maxp and g > 1 / 64:                # too many: lower it
-            g /= 2
-            p2 = louvain_parts(members, g)
-            if len(p2) < 2:
+            if len(parts) < 2:
+                continue
+            big = max(len(m) for m in parts) / len(members)
+            if best is None or big < best[0] - 0.05:
+                best = (big, parts)
+            if big <= 0.5 or len(parts) > maxp:
                 break
-            parts = p2
-        if len(parts) > maxp:                                  # still too many: group the groups by link order
-            parts.sort(key=lambda m: min(order[v] for v in m))
-            parts = [sum(b, []) for b in chunk(parts, maxp, size=len)]
+        parts = best[1] if best else []
+        if len(parts) > maxp:
+            parts = regroup(parts)
         if len(parts) < 2:                                     # no structure at all: cut along equation order
             ms = sorted(members, key=lambda v: (order[v], nodes[v]))
             parts = chunk(ms, min(maxp, max(2, -(-len(ms) // boxes))))
@@ -3568,17 +3582,52 @@ def compute_groups(nodes, par, geo=None, boxes=40):
     def build(members, depth, plab=None):
         out, seen = [], Counter()
         for mem in sorted(split(members), key=lambda m: (-len(m), nodes[m[0]])):
-            lab = label(mem)
+            lab = label(mem, plab)
             seen[lab] += 1
             if lab == plab or seen[lab] > 1:                    # keep names in a view distinct
                 lab = '%s (%s)' % (lab, 'core' if lab == plab and seen[lab] == 1 else 'part %d' % seen[lab])
             node = {'m': mem, 'k': keys_of(mem), 'lab': lab}
             if len(mem) > boxes and depth < 30 and len(mem) < len(members):
-                node['ch'] = build(mem, depth + 1, label(mem))
+                node['ch'] = build(mem, depth + 1, plab if plab and label(mem, plab).startswith('around ') else label(mem, plab))
             out.append(node)
         return out
 
     linked = [i for i in range(n) if nbr[i]]                   # variables with no links at all are left out
+    if geo and len(linked) > boxes:                            # geographies found in the names: split by them first
+        gl = {i: (geo(nodes[i]) or '') for i in linked}
+        byg = defaultdict(list)
+        for i in linked:
+            byg[gl[i]].append(i)
+        coded = sum(len(m) for g, m in byg.items() if g)
+        if len([g for g in byg if g]) >= 3 and coded >= 0.5 * len(linked):
+            users = defaultdict(set)                           # geography -> other geographies that use it
+            for i in linked:
+                for u in par[i]:
+                    if u in gl and gl[u] != gl[i]:
+                        users[gl[u]].add(gl[i])
+            gs = sorted(byg)
+            hubs = [g for g in gs if g == '' or len(users[g]) >= max(2, len(gs) / 3)]
+            rest = [g for g in gs if g not in hubs]
+
+            def gnode(g):
+                mem = sorted(byg[g])
+                node = {'m': mem, 'k': keys_of(mem), 'lab': g or '(no geography)'}
+                if len(mem) > boxes:
+                    node['ch'] = build(mem, 1, node['lab'])
+                return node
+            tree = [gnode(g) for g in hubs]
+            room = max(2, maxp - len(tree))
+            if len(rest) <= room:
+                tree += [gnode(g) for g in rest]
+            else:
+                per = -(-len(rest) // (-(-len(rest) // maxp)))
+                for b in range(0, len(rest), per):
+                    blk = rest[b:b + per]
+                    ch = [gnode(g) for g in blk]
+                    mem = sorted(v for c in ch for v in c['m'])
+                    tree.append({'m': mem, 'k': keys_of(mem), 'lab': '%s … %s (%d regions)' % (blk[0] or '-', blk[-1], len(blk)),
+                                 'ch': ch})
+            return {'tree': tree, 'boxes': boxes, 'by': 'geography'}
     tree = build(linked, 0) if len(linked) > boxes else (
         [{'m': linked, 'k': [], 'lab': 'whole model'}] if linked else [])
     return {'tree': tree, 'boxes': boxes}
@@ -4789,7 +4838,7 @@ let KC={};
    else{const x1=A.x+BW,y1=A.y+BH/2,x2=B.x+BW,y2=B.y+BH/2,bx=Math.max(x1,x2)+30;d=`M${x1},${y1} C${bx},${y1} ${bx},${y2} ${x2},${y2}`}
    ed+=`<path d="${d}" fill="none" stroke="var(--mut)" stroke-opacity=".35" stroke-width="${opt&&opt.edges?1.6:1}" marker-end="url(#la${k})" data-e="${u},${v}"${gs.has(u)&&!(opt&&opt.edges)?' stroke-dasharray="4 3"':''}/>`});
   const foc=FOC[k];let nd='';[...all].forEach(i=>{const n=D.nodes[i],p=P[i],g=gapOf(n),gh=gs.has(i),f=foc===i;
-   nd+=`<g class="ln" data-n="${esc(n)}" data-i="${i}" style="cursor:pointer"><title>${esc(n)}: ${Y.d[i]} layers${opt&&opt.tip?opt.tip(i):''}${AREA&&Y.da[i]!=null?`, ${Y.da[i]} into ${AL}`:''}${g!=null?`, gap ${pct(g)}`:', unchanged'}${Y.lp[i]>1?`, in a loop of ${Y.lp[i]}`:''}${gh?` (from Map ${k-1})`:''}</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${col(g)}" fill-opacity="${gh?.45:1}" stroke="${f?'var(--b)':inA(n)?'var(--a)':'var(--mut)'}" stroke-opacity="${f||inA(n)?1:.4}" stroke-width="${f?3:inA(n)?2:1}"${gh?' stroke-dasharray="4 3"':''}/><text x="${p.x+6}" y="${p.y+17}" font-size="11" fill="var(--fg)">${esc(n.length>22?n.slice(0,21)+'…':n)}</text></g>`});
+   nd+=`<g class="ln" data-n="${esc(n)}" data-i="${i}" style="cursor:pointer"><title>${esc(n)}: ${Y.d[i]} layers${opt&&opt.tip?opt.tip(i):''}${AREA&&Y.da[i]!=null?`, ${Y.da[i]} into ${AL}`:''}${g!=null?`, gap ${pct(g)}`:', unchanged'}${Y.lp[i]>1?`, in a loop of ${Y.lp[i]}`:''}${gh?` (from Map ${k-1})`:''}</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="var(--bg,#fff)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${col(g)}" fill-opacity="${gh?.45:1}" stroke="${f?'var(--b)':inA(n)?'var(--a)':'var(--mut)'}" stroke-opacity="${f||inA(n)?1:.4}" stroke-width="${f?3:inA(n)?2:1}"${gh?' stroke-dasharray="4 3"':''}/><text x="${p.x+6}" y="${p.y+17}" font-size="11" fill="var(--fg)">${esc(n.length>22?n.slice(0,21)+'…':n)}</text></g>`});
   const hd=ks.map(L=>`<text x="${x0[L]}" y="12" font-size="11" fill="var(--mut)">${opt&&opt.hdr?opt.hdr(L,cols.get(L).length):L===Infinity?`from Map ${k-1} (${cols.get(L).length})`:`${L} layer${L===1?'':'s'} (${cols.get(L).length})`}</text>`).join('');
   const S=LVS[k];S.full=[0,-6,W,H+20];S.v=S.full.slice();
   el.innerHTML=`<svg id="lsvg${k}" viewBox="${S.v.join(' ')}" style="width:${Math.min(($('#t-lay').clientWidth||1100),Math.round(W*1.15))}px;max-width:100%;height:${Math.round(Math.min(680,Math.max(120,Math.min(($('#t-lay').clientWidth||1100),W*1.15)*(H+20)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="la${k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--mut)"/></marker></defs>${hd}${ed}${nd}</svg>`;
@@ -4889,7 +4938,7 @@ let KC={};
    else if(d[0]==='g'){const j=+d.slice(1),g=groups[j],iso=g.k.length<=K,ch=g.m.filter(i=>ROW[D.nodes[i]]).length,sel=GSEL[k]==='g'+j;
     nd+=`<g class="gb" data-s="g${j}" style="cursor:pointer"><title>${esc(g.lab)}: ${g.m.length} variables (${ch} changed), joined to the rest through ${g.k.length} key variable${g.k.length===1?'':'s'}: ${g.k.slice(0,12).map(i=>D.nodes[i]).join(', ')}${g.k.length>12?', …':''}. Click to open.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="9" fill="var(--card)" stroke="${sel?'var(--b)':iso?'var(--a)':'var(--mut)'}" stroke-width="${sel?3:iso?2.2:1}" stroke-opacity="${sel||iso?1:.5}"/><text x="${p.x+8}" y="${p.y+16}" font-size="11.5" font-weight="600" fill="var(--fg)">${esc((g.lab.length>20?g.lab.slice(0,19)+'…':g.lab))} · ${g.m.length}</text><text x="${p.x+8}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${ch} changed · via ${g.k.length} key${g.k.length===1?'':'s'}${g.ch?' · ▸':''}</text></g>`}
    else{const i=+d.slice(1),n=D.nodes[i],g=gapOf(n),out=parentSet&&!parentSet.has(i);
-    nd+=`<g class="ln" data-n="${esc(n)}" style="cursor:pointer"><title>${esc(n)}: key variable for ${kc.get(i)} group${kc.get(i)>1?'s':''}${g!=null?`, gap ${pct(g)}`:', unchanged'}${out?' (outside this group)':''}. Double-click for details.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${gapCol(g)}" stroke="var(--fg)" stroke-opacity=".55" stroke-width="1.4"${out?' stroke-dasharray="4 3"':''}/><text x="${p.x+6}" y="${p.y+17}" font-size="11" font-weight="600" fill="var(--fg)">🔑 ${esc(n.length>21?n.slice(0,20)+'…':n)}</text></g>`}});
+    nd+=`<g class="ln" data-n="${esc(n)}" style="cursor:pointer"><title>${esc(n)}: key variable for ${kc.get(i)} group${kc.get(i)>1?'s':''}${g!=null?`, gap ${pct(g)}`:', unchanged'}${out?' (outside this group)':''}. Double-click for details.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="var(--bg,#fff)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${gapCol(g)}" stroke="var(--fg)" stroke-opacity=".55" stroke-width="1.4"${out?' stroke-dasharray="4 3"':''}/><text x="${p.x+6}" y="${p.y+17}" font-size="11" font-weight="600" fill="var(--fg)">🔑 ${esc(n.length>21?n.slice(0,20)+'…':n)}</text></g>`}});
   const S=LVS[k];S.full=[0,0,W,H+10];S.v=S.full.slice();const cw=$('#t-lay').clientWidth||1100,w=Math.min(cw,Math.round(W*1.1));
   el.innerHTML=`<svg id="lsvg${k}" viewBox="${S.v.join(' ')}" style="width:${w}px;max-width:100%;height:${Math.round(Math.min(700,Math.max(140,w*(H+10)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="lg${k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--mut)"/></marker></defs>${ed}${nd}</svg>`;
   const sv=$('#lsvg'+k);panZoom(sv,S,'[data-lz'+k+']','lz'+k);
