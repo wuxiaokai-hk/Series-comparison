@@ -1,0 +1,6 @@
+variable,description,differs_between_scenarios,reason,detail,file,equation
+CAP,"CET1 capital, $M",yes,missing values in some quarters (warning; still used),1 quarter(s): 2019Q1,equations_base.txt,CAP = CAP(-1) + 0.7*NETINC
+LGD,Loss given default,yes,missing values in some quarters (warning; still used),"4 quarter(s): 2019Q1, 2019Q2, 2019Q3, 2019Q4",equations_base.txt,LGD = 0.25 - 0.004*@PCY(HPI)
+LOANS,"Loan book, $M",yes,missing values in some quarters (warning; still used),1 quarter(s): 2019Q1,equations_base.txt,DLOG(LOANS) = 0.004 + 0.002*GDPG
+PD,Probability of default (12-month),yes,missing values in some quarters (warning; still used),"4 quarter(s): 2019Q1, 2019Q2, 2019Q3, 2019Q4",equations_base.txt,PD = 0.004 + 0.0015*UNEMP - 0.0004*@PCY(HPI)
+PROV,"Provisions, $M",yes,missing values in some quarters (warning; still used),1 quarter(s): 2019Q1,equations_base.txt,PROV = ECL - ECL(-1)
