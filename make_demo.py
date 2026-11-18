@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Demo: a credit-union stress model with NO geographies, where scenario B
+"""Demo: a bank stress model with NO geographies, where scenario B
 also uses DIFFERENT equations from scenario A.
 
   python make_demo.py demo
@@ -27,7 +27,7 @@ per = ['%dQ%d' % (y, q) for y in range(2019, 2031) for q in range(1, 5)]
 T = len(per)
 F = per.index('2026Q1')
 
-EQ_BASE = """' Credit-union stress model: base-case equations
+EQ_BASE = """' Bank stress model: base-case equations
 PD = 0.004 + 0.0015*UNEMP - 0.0004*@PCY(HPI)
 LGD = 0.25 - 0.004*@PCY(HPI)
 DLOG(LOANS) = 0.004 + 0.002*GDPG
@@ -40,7 +40,7 @@ CAP = CAP(-1) + 0.7*NETINC
 RWA = 0.55*LOANS
 CET1 = 100*CAP/RWA
 """
-EQ_STRESS = """' Credit-union stress model: stress equations (team re-specified PD and RWA)
+EQ_STRESS = """' Bank stress model: stress equations (modeller re-specified PD and RWA)
 PD = 0.004 + 0.0025*UNEMP - 0.0004*@PCY(HPI) + [ar(1)=0.4, estsmpl="2008q1 2019q4"]
 LGD = 0.25 - 0.004*@PCY(HPI)
 DLOG(LOANS) = 0.004 + 0.002*GDPG

@@ -1684,7 +1684,7 @@ class Model:
             self.desc.update(meta)
         self.eqs = dict(eqs or {})
         self._detect_geo(geo_sep, af_suffix)
-        # variables the team set exogenously: keep their equation for display, but treat them as
+        # variables the modeller set exogenously: keep their equation for display, but treat them as
         # assumptions (no equation): never re-solved, so shocks stop there
         # scenario B may have its own equations: compare them with A's, variable by variable
         self.eqs_b, self.eq_status, self.eqs_b_all = {}, {}, None
@@ -2652,7 +2652,7 @@ def cmd_info(M, args, eqstats=None, fails=None):
     if eqstats:
         print('Equations: %s' % ', '.join('%s=%d' % kv for kv in sorted(eqstats.items())))
         if M.exog or M.exog_missing:
-            print('Set exogenously by the team (--exog): %d with an equation, treated as assumptions%s' % (
+            print('Set exogenously by the modeller (--exog): %d with an equation, treated as assumptions%s' % (
                 len(M.exog), ('; %d listed names have no equation: %s' % (len(M.exog_missing), ', '.join(M.exog_missing[:8])))
                 if M.exog_missing else ''))
         print('Add-factor series found: %d (suffix %s), e.g. %s' % (
@@ -2814,7 +2814,7 @@ def print_contrib(M, n, prefix='', at=None):
     eq = M.eqs.get(n)
     if eq is None:
         if n in M.exog:
-            print(prefix + '(set exogenously by the team: its equation is switched off, so its whole gap is a '
+            print(prefix + '(set exogenously by the modeller: its equation is switched off, so its whole gap is a '
                            'scenario choice. Equation: %s)' % M.exog[n].text[:200])
         else:
             print(prefix + '(no equation: an assumption set by the scenario)')
@@ -2855,7 +2855,7 @@ def cmd_explain(M, args):
     def head(n, prefix):
         s = M.stats.get(n)
         info = ('gap at end %s (%s)' % (fmt(s['dend']), fpct(s['pend']))) if s and s['differs'] else 'no difference'
-        print('%s%s  %s  [%s]' % (prefix, n, info, 'set exogenously by the team' if n in M.exog else KIND_TEXT.get(M.kind(n), '')))
+        print('%s%s  %s  [%s]' % (prefix, n, info, 'set exogenously by the modeller' if n in M.exog else KIND_TEXT.get(M.kind(n), '')))
 
     def rec(n, depth, prefix):
         d = print_contrib(M, n, prefix + '    ', at)
@@ -3239,7 +3239,7 @@ def cmd_attribute(M, args):
             continue
         lab = s if kind == 'data' else '%s%s' % (M.af_label(s), (' (%s)' % M.af[s]) if s in M.af else '')
         print('  %s %-12s %s  [%s]' % (fsh(e[i] / g if abs(g) > 1e-12 else None), fmt(e[i]), lab,
-                                       ('set exogenously by the team' if s in M.exog else KIND_TEXT.get(M.kind(s), ''))
+                                       ('set exogenously by the modeller' if s in M.exog else KIND_TEXT.get(M.kind(s), ''))
                                        if kind == 'data' else ('equation differs' if s in M.eq_status else 'add-factor / residual')))
         shown += 1
         if shown >= args.n:
@@ -3532,7 +3532,7 @@ def _pct_word(p):
 def compute_importance(M, max_shocks=None, keys=None, log=lambda m: None):
     """Relative importance of every scenario shock.
 
-    Shocks = changed exogenous variables (no equation, or set by the team) and changed add-factors.
+    Shocks = changed exogenous variables (no equation, or set by the modeller) and changed add-factors.
     For each shock alone: re-solve every equation it feeds, with everything else at scenario A, and
     take its effect e_t on each variable. Its share of variable y's gap g_t over the whole window is
         share = sum_t e_t * g_t / sum_t g_t^2
@@ -3609,7 +3609,7 @@ def compute_importance(M, max_shocks=None, keys=None, log=lambda m: None):
         eq_w = sum(sh.get(y, 0.0) for y in ys) / max(1, len(ys))
         cw = sum(sh.get(y, 0.0) / conc[M.stem(y)] for y in ys) / max(1, len(conc))
         kw = (sum(sh.get(y, 0.0) for y in keyset if y in tset) / max(1, len(keyset & tset))) if keyset else None
-        res[sid] = {'id': sid, 'kind': kind, 'series': sname, 'type': 'set by team' if sname in M.exog else
+        res[sid] = {'id': sid, 'kind': kind, 'series': sname, 'type': 'set by modeller' if sname in M.exog else
                     ('add-factor' if kind == 'addfactor' else 'exogenous'),
                     'desc': M.desc.get(sname, ''), 'reach': len(M.descendants(sname)) + (1 if kind == 'addfactor' else 0),
                     'w_all': eq_w, 'w_concept': cw, 'w_key': kw,
@@ -3681,7 +3681,7 @@ def aggregate_importance(M, share, targets, keys=None):
         sname = sid[3:] if sid.startswith('AF:') else sid
         kind = 'addfactor' if sid.startswith('AF:') else 'data'
         res[sid] = {'id': sid, 'kind': kind, 'series': sname,
-                    'type': 'set by team' if sname in M.exog else (
+                    'type': 'set by modeller' if sname in M.exog else (
                         ('equation changed' if sname in M.eq_status else 'add-factor') if kind == 'addfactor' else
                         ('exogenous' if sname not in M.eqs else 'not evaluable')),
                     'desc': M.desc.get(sname, ''), 'reach': _reach_of(M, sname) + (1 if kind == 'addfactor' else 0),
@@ -3730,7 +3730,7 @@ def compute_importance_fast(M, keys=None, log=lambda m: None, prune=5e-4, keep=3
             return S[k]
         if k in w:          # endogenous, filled in its own turn
             return {}
-        roots.add(k)        # exogenous / set by team / not evaluable: a root shock
+        roots.add(k)        # exogenous / set by modeller / not evaluable: a root shock
         S[k] = {k: 1.0}
         return S[k]
 
@@ -4184,7 +4184,7 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;'
 function fmt(v){if(v==null||isNaN(v))return'–';if(v===0||Math.abs(v)<1e-9)return'0';const a=Math.abs(v);if(a>=1e4)return v.toLocaleString(undefined,{maximumFractionDigits:0});return Number(v.toPrecision(4)).toString()}
 function pct(v){if(v==null||isNaN(v))return'–';return(v>0?'+':'')+v.toFixed(2)+'%'}
 function cls(v){return v>0?'pos':v<0?'neg':''}
-function badge(k,n){if(n&&EXOG.has(n))return `<span class="badge bX" title="Has an equation, but the team set it exogenously (--exog)">set by team</span>`;return k&&k!=='-'?`<span class="badge b${k}" title="${esc(KL[k]||'')}">${KT[k]}</span>`:''}
+function badge(k,n){if(n&&EXOG.has(n))return `<span class="badge bX" title="Has an equation, but the modeller set it exogenously (--exog)">set by modeller</span>`;return k&&k!=='-'?`<span class="badge b${k}" title="${esc(KL[k]||'')}">${KT[k]}</span>`:''}
 function vlink(n){return `<a class="v" data-v="${esc(n)}">${esc(n)}</a>`}
 function desc(n){const r=ROW[n];return r?r[1]:(D.desc[n]||'')}
 document.addEventListener('click',e=>{const a=e.target.closest('[data-v]');if(a){e.preventDefault();show(a.dataset.v)}});
@@ -4353,8 +4353,8 @@ let KC={};
 // ---------- importance
 (function(){const I=D.imp;if(!I)return;
  const lab=id=>id.startsWith('AF:')?afText(id.slice(3)):id,lk=id=>id.startsWith('AF:')?afLink(id.slice(3)):vlink(id);
- $('#t-imp').innerHTML=`<div class="hint">Which shocks matter most? Each <b>shock</b> is a changed exogenous variable (no equation, or set by the team) or a changed add-factor. Each one is switched from A to B <i>on its own</i>, everything it feeds is traced through the equations, and for each of the ${I.n_targets.toLocaleString()} variables that moved we measure the share of its gap the shock explains (whole window: Σ effect·gap / Σ gap²). For each variable, the shares of all shocks add up to about 100%. <b>Importance</b> = the average of those shares across variables.</div>
- <div class="ctl"><label class="small mut">Weight variables <select id="iw"><option value="4">by concept (each concept counts once, so 50 state copies don't dominate)</option><option value="3">all equally</option>${I.shocks.some(r=>r[5]!=null)?'<option value="5">key variables only (Summary tab)</option>':''}</select></label><select id="it"><option value="">All shock types</option><option>exogenous</option><option>add-factor</option><option>equation changed</option><option>set by team</option></select><input type="text" id="iq" placeholder="Search"></div>
+ $('#t-imp').innerHTML=`<div class="hint">Which shocks matter most? Each <b>shock</b> is a changed exogenous variable (no equation, or set by the modeller) or a changed add-factor. Each one is switched from A to B <i>on its own</i>, everything it feeds is traced through the equations, and for each of the ${I.n_targets.toLocaleString()} variables that moved we measure the share of its gap the shock explains (whole window: Σ effect·gap / Σ gap²). For each variable, the shares of all shocks add up to about 100%. <b>Importance</b> = the average of those shares across variables.</div>
+ <div class="ctl"><label class="small mut">Weight variables <select id="iw"><option value="4">by concept (each concept counts once, so 50 state copies don't dominate)</option><option value="3">all equally</option>${I.shocks.some(r=>r[5]!=null)?'<option value="5">key variables only (Summary tab)</option>':''}</select></label><select id="it"><option value="">All shock types</option><option>exogenous</option><option>add-factor</option><option>equation changed</option><option>set by modeller</option></select><input type="text" id="iq" placeholder="Search"></div>
  ${Object.keys(I.geo||{}).length>1?`<div class="ctl"><label class="small mut">Variables to explain <select id="ig"><option value="">All geographies (${I.n_targets.toLocaleString()} variables)</option>${Object.entries(I.geo).sort((a,b)=>a[0]<b[0]?-1:1).map(([g,o])=>`<option value="${esc(g)}">${esc(g)} only (${o.n.toLocaleString()} variables)</option>`).join('')}</select></label><span class="small mut" id="ign"></span></div>`:''}
  <div id="ichart"></div><div class="tw"><table><thead><tr><th>#</th><th>Shock</th><th>Type</th><th>Description</th><th class="n">Importance</th><th class="n" title="Number of variables where this shock explains at least 10% of the gap">Explains ≥10% of</th><th class="n">≥50% of</th><th class="n">Variables it feeds</th><th>Explains most of</th></tr></thead><tbody id="itb"></tbody></table></div>
  <h2>Look up a variable</h2><div class="ctl"><input type="text" id="iv" placeholder="Variable, e.g. FGDP$_ICAN"><button class="btn" id="ivgo">Show its main shocks</button></div><div id="ivout"></div>`;
@@ -4527,7 +4527,7 @@ function show(n,noPush){
  if(v){h+=lineChart(v[0],v[1],D.per,D.wsi);const df=v[0].map((x,i)=>x==null||v[1][i]==null?null:v[1][i]-x);h+=barChart(df,D.per,'Gap B − A by period')}
  else if(r){const g=D.pg[n];if(g)h+=lineChart2(g,null,D.per.slice(D.wsi),'gap B − A, % of A','',null);
   h+=`<div class="hint">The A and B paths are not embedded for this variable, only its gap (% of A) by quarter${D.eshp&&D.eshp[NI[n]]?' and, below, where it comes from':''}. For the full charts, build the report with <code>--embed all</code> or use <code>serve</code>.</div>`}
- if(eq&&EXOG.has(n))h+=`<h2>Equation (switched off)</h2><pre class="eq">${esc(eq)}</pre><div class="card">The team set <b>${esc(n)}</b> exogenously, so this equation is not used: its whole gap is a scenario choice, and shocks to its inputs stop here.</div>`;
+ if(eq&&EXOG.has(n))h+=`<h2>Equation (switched off)</h2><pre class="eq">${esc(eq)}</pre><div class="card">The modeller set <b>${esc(n)}</b> exogenously, so this equation is not used: its whole gap is a scenario choice, and shocks to its inputs stop here.</div>`;
  else if(ES[n]){const e=(D.eqdiff||[]).find(z=>z[0]===n);h+=`<h2>Equations</h2>`+eqPair(e)+`<div class="hint">${ES[n]==='changed'?'The formula differs between the scenarios. The effect of switching from A\'s equation to B\'s (together with its add-factor) is shown below as one line, <i>equation changed</i>. Each effect is averaged over A\'s and B\'s equation.':ES[n]==='only_a'?'B has no equation for it: B sets it directly. That switch is shown below as <i>equation dropped in B</i>.':'A has no equation for it: A sets it directly. B\'s formula is used for both, and the switch is shown as <i>equation added in B</i>.'}</div>`}
  else if(eq){h+=`<h2>Equation</h2><pre class="eq">${esc(eq)}</pre>`;if(/\[[^\]]*\b(ar|ma|sar|sma)\s*\(/i.test(eq))h+=`<div class="hint">The [AR/MA …] part describes how the equation's error evolves. It is not dropped: the tool backs the error out of the data in each scenario, so the AR/MA process is already inside it. A change in an input moves ${esc(n)} through the formula, the error path stays as in scenario A, and a changed add-factor carries forward through the AR term exactly as in the model.</div>`;if(D.why[n])h+=`<div class="hint">${esc(D.why[n])}</div>`;if(D.afmap[n])h+=`<div class="hint">Add-factor series: ${vlink(D.afmap[n])} ${gapTxt(D.afmap[n])}</div>`}
  else if(M.has_eqs)h+=`<div class="card">No equation for ${esc(n)} — it is an <b>assumption</b> (exogenous). Its path is set directly by the scenario.</div>`;
@@ -4780,7 +4780,7 @@ def main(argv=None):
         sp.add_argument('--adj-threshold', type=float, default=0.25,
                         help='flag a variable as "mostly add-factor" above this share of its change (0.25)')
         sp.add_argument('--exog', action='append', metavar='LIST',
-                        help='variables the team set exogenously although they have an equation: a file '
+                        help='variables the modeller set exogenously although they have an equation: a file '
                              '(names separated by spaces, commas or new lines) or a comma-separated list. Repeatable.')
         sp.add_argument('--af-suffix', default='',
                         help='suffix of add-factor series, e.g. GDP.US_A (default _A; comma-separate several)')
