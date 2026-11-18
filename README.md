@@ -189,6 +189,7 @@ Without `--exog`, an exogenized variable shows up as *mostly add-factor*. The to
 | option | default | what |
 |---|---|---|
 | `--target SPEC` | | keep only these variables and everything that feeds them (directly or through any chain of equations, lags included). A geography code (`ICAN`), a wildcard (`"*_ICAN"`), names or a comma list; repeatable. Results for the kept variables are unchanged, just faster |
+| `--target-exog` | off | with `--target`: treat every variable outside the target as exogenous. Only the target's own equations are solved; the outside variables they use (e.g. US GDP for `ICAN`) are taken from each scenario's data and become the shocks. Without it, gaps are traced back to the model's root shocks |
 | `--area SPEC` | `--target` | area for the Layers tab: chains that end in these variables (geography code, wildcard or names) |
 | `--tol` | 1e-6 | relative tolerance before a series counts as different |
 | `--geo-sep` | auto | character before the geography code: `.`, `_`, or auto-detect. A name ending counts as a geography only if 3+ concepts share it |

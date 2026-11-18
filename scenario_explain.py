@@ -4836,7 +4836,9 @@ def build_model(args):
            if area else '', len(args.layers), time.time() - t1))
     if getattr(args, 'target', None):
         args.target_set = _apply_target(args.target, A, B, eqs, eqs_b, addl, load_exog(args.exog),
-                                        args.af_suffix, say)
+                                        args.af_suffix, say, outside_exog=getattr(args, 'target_exog', False))
+    elif getattr(args, 'target_exog', False):
+        raise SystemExit('--target-exog needs --target')
     M = Model(A, B, eqs, addl, start=args.start, end=args.end, tol=args.tol, geo_sep=args.geo_sep,
               adj_threshold=args.adj_threshold, meta=meta, verbose=not getattr(args, 'quiet', False),
               af_suffix=args.af_suffix, exog=load_exog(args.exog), eqs_b=eqs_b)
@@ -4920,11 +4922,13 @@ def layer_chain(L, n, area=False, limit=60):
     return out
 
 
-def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say):
+def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say, outside_exog=False):
     """--target: keep only the target variables and every series that feeds them through the equations
     (directly or via any chain, lags included), plus their add-factor series. Everything else is dropped
     before the model is built, so all results are unchanged for the kept variables, only faster.
-    A spec is an exact name, a wildcard (*_ICAN, FGDP*), or a bare geography code (ICAN = *.ICAN and *_ICAN)."""
+    A spec is an exact name, a wildcard (*_ICAN, FGDP*), or a bare geography code (ICAN = *.ICAN and *_ICAN).
+    outside_exog (--target-exog): only the targets keep their equations; every other variable their equations
+    use is taken as given from each scenario's data (exogenous), and nothing upstream of it is kept."""
     names = set(A.series) | set(B.series) | set(eqs) | set(eqs_b or {})
     targets = _match_spec(names, spec_list, '--target', say)
     if not targets:
@@ -4943,7 +4947,8 @@ def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say):
         for d in drivers.get(n, ()):
             if d not in keep:
                 keep.add(d)
-                stack.append(d)
+                if not outside_exog:           # with --target-exog, stop at the first variable outside
+                    stack.append(d)
     # add-factor series named by suffix (GDP.US_A or GDP_A.US) of kept variables
     sufs = [x.strip().upper() for x in (af_suffix or '').split(',') if x.strip()]
     for n in set(A.series) | set(B.series):
@@ -4954,7 +4959,7 @@ def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say):
             for sep in ('.', '_'):
                 if sf + sep in n:
                     base.append(n.replace(sf + sep, sep, 1))
-            if any(b in keep for b in base):
+            if any(b in (targets if outside_exog else keep) for b in base):
                 keep.add(n)
                 break
     total = len(set(A.series) | set(B.series))
@@ -4966,6 +4971,18 @@ def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say):
                 del E[n]
     for y in [y for y in (addl or {}) if y not in keep]:
         del addl[y]
+    if outside_exog:
+        n_off = 0
+        for E in (eqs, eqs_b):
+            if E is not None:
+                for n in [n for n in E if n not in targets]:
+                    del E[n]
+                    n_off += 1
+        for y in [y for y in (addl or {}) if y not in targets]:
+            del addl[y]
+        say('--target-exog: %d variables outside the target feed it directly; they are taken as given '
+            '(exogenous) from each scenario, %d of their equations switched off'
+            % (len(keep - targets), n_off))
     say('--target: %d target variables; keeping %d of %d series (the targets and everything that feeds them)'
         % (len(targets), len(set(A.series) | set(B.series)), total))
     return targets
@@ -5016,6 +5033,9 @@ def main(argv=None):
         sp.add_argument('--target', action='append', metavar='SPEC',
                         help='keep only these variables and everything that feeds them: a geography code (ICAN), '
                              'a wildcard ("*_ICAN"), names or a comma list; repeatable')
+        sp.add_argument('--target-exog', action='store_true',
+                        help='with --target: treat every variable outside the target as exogenous (taken from '
+                             'each scenario), so only the target\'s own equations are solved')
         sp.add_argument('--area', action='append', metavar='SPEC',
                         help='area for the Layers tab: longest chains that end in these variables (geography code, '
                              'wildcard or names; default: --target)')
