@@ -4456,7 +4456,7 @@ let KC={};
  const gapOf=n=>{const r=ROW[n];return r?r[7]:null};
  const inA=n=>AREA&&AREA.has(n);
  const chainHTML=(n,a)=>chain(n,a).map((v,k)=>`${k?'<span class="arrow">→</span>':''}<span class="step">${vlink(v)}${lpOf(v)>1?` <span class="badge" title="part of a loop of ${lpOf(v)} variables; the loop counts as one layer">loop ${lpOf(v)}</span>`:''}${inA(v)?' <span class="badge bE">area</span>':''}</span>`).join('');
- let h=`<div class="hint"><b>Layers</b> = the longest chain of equations from a variable downstream: 0 = no equation uses it; 3 = it feeds a variable that feeds a variable that feeds a variable. A loop (e.g. GDP → income → consumption → GDP) counts as <b>one</b> layer, since inside a loop the chain never ends. Lags count as links. This is the model's structure, not the size of an effect.${Y.pruned?` Counted on the full model before <code>--target</code> dropped variables.`:''}</div>`;
+ let h=`<div class="hint"><b>Layers</b> = the longest chain of equations from a variable downstream: 0 = no equation uses it; 3 = it feeds a variable that feeds a variable that feeds a variable. A loop (e.g. GDP → income → consumption → GDP) counts as <b>one</b> layer, since inside a loop the chain never ends. Lags count as links. This is the model's structure, not the size of an effect.${M.target_exog?` With <code>--target-exog</code> only the equations of ${esc(AL)} count as links: variables outside it are exogenous, so links among them are ignored.`:Y.pruned?` Counted on the full model before <code>--target</code> dropped variables.`:''}</div>`;
  h+=`<div class="ctl">${AREA?`<label>Measure <select id="lm"><option value="0">longest chain, anywhere</option><option value="1">longest chain ending in ${esc(AL)}</option></select></label>`:''} <input type="text" id="lq" placeholder="filter names, e.g. _ICAN or FGDP"> <label><input type="checkbox" id="lc"> changed only</label></div>
  <div id="lh"></div><div id="lch"></div><div class="tw"><table><thead><tr><th>Variable</th><th>Type</th><th class="n">Layers</th>${AREA?`<th class="n">Into ${esc(AL)}</th>`:''}<th class="n">Used directly by</th><th class="n">Gap at end</th><th>Longest chain</th></tr></thead><tbody id="lt"></tbody></table></div><div id="lmore"></div>`;
  if(AREA){h+=`<h2>Inputs into ${esc(AL)}</h2><div id="lin"></div>`;if(Y.out)h+=`<h2>What ${esc(AL)} feeds outside</h2><div id="lout"></div>`}
@@ -4839,12 +4839,17 @@ def build_model(args):
         area, area_label = _match_spec(allnames, args.area, '--area', say), ', '.join(args.area)
     elif getattr(args, 'target', None):
         area, area_label = _match_spec(allnames, args.target, '--target', lambda m: None), ', '.join(args.target)
+    if getattr(args, 'target_exog', False) and getattr(args, 'target', None):
+        # everything outside the target is exogenous: only the target's own equations are links
+        tset = _match_spec(allnames, args.target, '--target', lambda m: None)
+        lp = {n: ds for n, ds in lp.items() if n in tset}
     t1 = time.time()
     args.layers = compute_layers(lp, area)
     args.layers_area = (sorted(area) if area else None, area_label)
     args.area_out = _area_outputs(area, eqs, eqs_b, exog_names, A, B) if area else None
-    say('Layers: longest chain %d%s, %d variables in %.1fs'
-        % (max((v[0] for v in args.layers.values()), default=0),
+    say('Layers%s: longest chain %d%s, %d variables in %.1fs'
+        % (' (target equations only, --target-exog)' if getattr(args, 'target_exog', False) else '',
+           max((v[0] for v in args.layers.values()), default=0),
            (', into %s %s' % (area_label, max((v[1] for v in args.layers.values() if v[1] is not None), default=0)))
            if area else '', len(args.layers), time.time() - t1))
     if getattr(args, 'target', None):
@@ -5012,6 +5017,10 @@ def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say, outsi
     for y in [y for y in (addl or {}) if y not in keep]:
         del addl[y]
     if outside_exog:
+        # add-factor series of the targets are not outside inputs
+        afs = set((addl or {}).values()) | {a for a in keep - targets
+                                             if not any(a in e.drivers for E in (eqs, eqs_b or {})
+                                                        for t, e in E.items() if t in targets)}
         n_off = 0
         for E in (eqs, eqs_b):
             if E is not None:
@@ -5022,7 +5031,7 @@ def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say, outsi
             del addl[y]
         say('--target-exog: %d variables outside the target feed it directly; they are taken as given '
             '(exogenous) from each scenario, %d of their equations switched off'
-            % (len(keep - targets), n_off))
+            % (len(keep - targets - afs), n_off))
     say('--target: %d target variables; keeping %d of %d series (the targets and everything that feeds them)'
         % (len(targets), len(set(A.series) | set(B.series)), total))
     return targets
