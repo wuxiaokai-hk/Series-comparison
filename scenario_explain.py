@@ -3228,7 +3228,7 @@ def cmd_layers(M, args):
 
 
 def cmd_groups(M, args):
-    """Print groups of variables that are dense inside and joined to the rest through few key variables."""
+    """Print the tree of groups: each group, its size and the key variables joining it to the rest."""
     names = set(M.parents)
     for ps in M.parents.values():
         names.update(ps)
@@ -3236,23 +3236,31 @@ def cmd_groups(M, args):
     idx = {n: i for i, n in enumerate(nodes)}
     par = [[idx[p] for p in M.parents.get(n, ()) if p in idx] for n in nodes]
     t = time.time()
-    G = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None))['groups']
-    print('%d groups in %.1fs. Key variables = the fewest variables that every link between the group and the '
-          'rest of the model passes through.' % (len(G), time.time() - t))
-    G = sorted(G, key=lambda g: (len(g['k']) > args.max_keys, -len(g['m'])))
+    G = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None), boxes=args.map_boxes)
+    print('Groups in %.1fs, at most %d boxes per view. Key variables = the fewest variables that every link '
+          'between the group and the rest of the model passes through.' % (time.time() - t, G['boxes']))
+    shown = [0]
 
-    def line(g, ind):
-        ks = [nodes[i] for i in g['k']]
-        print('%s%-28s %6d variables  joined through %d key variable%s: %s%s' % (
-            ind, g['lab'][:28], len(g['m']), len(ks), '' if len(ks) == 1 else 's', ', '.join(ks[:8]),
-            ', ...' if len(ks) > 8 else ''))
-    for g in G[:args.n]:
-        line(g, '')
-        for sg in (g.get('sub') or [])[:args.sub]:
-            line(sg, '    ')
-    iso = [g for g in G if 0 < len(g['k']) <= args.max_keys]
-    print('\n%d groups are joined to the rest through %d key variable%s or fewer.'
-          % (len(iso), args.max_keys, '' if args.max_keys == 1 else 's'))
+    def walk(ts, ind, d):
+        for g in ts:
+            if shown[0] >= args.n:
+                return
+            shown[0] += 1
+            ks = [nodes[i] for i in g['k']]
+            print('%s%-28s %6d variables  %s %d key%s: %s%s' % (
+                '  ' * ind, g['lab'][:28], len(g['m']), '*' if 0 < len(ks) <= args.max_keys else ' ',
+                len(ks), '' if len(ks) == 1 else 's', ', '.join(ks[:6]), ', ...' if len(ks) > 6 else ''))
+            if g.get('ch') and d < args.depth:
+                walk(g['ch'], ind + 1, d + 1)
+    walk(G['tree'], 0, 1)
+
+    def allg(ts):
+        for g in ts:
+            yield g
+            yield from allg(g.get('ch') or [])
+    iso = [g for g in allg(G['tree']) if 0 < len(g['k']) <= args.max_keys]
+    print('\n* = joined to the rest through %d key variable%s or fewer (%d groups at any level).'
+          % (args.max_keys, '' if args.max_keys == 1 else 's', len(iso)))
 
 
 def cmd_check(M, args):
@@ -3365,7 +3373,7 @@ def _af_rows(M):
     return rows
 
 
-def _louvain(n, edges):
+def _louvain(n, edges, gamma=1.0):
     """Louvain community detection (modularity), deterministic. edges: (i, j, w) undirected, i != j.
     Returns a community label per node 0..n-1."""
     adj = [dict() for _ in range(n)]
@@ -3390,9 +3398,9 @@ def _louvain(n, edges):
                     cj = comm[j]
                     wc[cj] = wc.get(cj, 0.0) + w
                 tot[ci] -= ki
-                best, bg = ci, wc.get(ci, 0.0) - tot[ci] * ki / m2
+                best, bg = ci, wc.get(ci, 0.0) - gamma * tot[ci] * ki / m2
                 for c, w in wc.items():
-                    g = w - tot[c] * ki / m2
+                    g = w - gamma * tot[c] * ki / m2
                     if g > bg + 1e-12:
                         best, bg = c, g
                 tot[best] += ki
@@ -3471,22 +3479,30 @@ def _min_cover(cut):
     return sorted(set(left) - zl) + sorted(zr)
 
 
-def compute_groups(nodes, par, geo=None, sub_min=40):
-    """Split the equation graph into groups that are dense inside and loosely linked to the rest (Louvain),
-    and find each group's key variables: the fewest variables all links between it and the rest pass
-    through (minimum vertex cover). Big groups are split again one level down.
-    nodes: names; par: list of parent index lists. Returns {'groups': [...]} with member and key indices."""
+def compute_groups(nodes, par, geo=None, boxes=40):
+    """Split the equation graph into a tree of groups, so that no view shows more than `boxes` boxes.
+    Each split uses Louvain community detection (dense inside, loose links to the rest), with its
+    resolution tuned to give 2 .. ~2/3 boxes parts; too many parts are grouped again; a set with no
+    structure is cut along the order of its equations. A group with at most `boxes` variables is a leaf.
+    Every group gets its key variables: the fewest variables all links between it and the rest of the
+    model pass through (minimum vertex cover of its boundary links).
+    nodes: names; par: list of parent index lists. Returns {'tree': [...top groups...], 'boxes': boxes}."""
     n = len(nodes)
-    und = {}
+    boxes = max(8, int(boxes))
+    maxp = max(2, boxes * 2 // 3)
+    und = set()
     for v, ps in enumerate(par):
         for u in ps:
             if u != v:
-                a, b = (u, v) if u < v else (v, u)
-                und[(a, b)] = 1.0
+                und.add((u, v) if u < v else (v, u))
     nbr = [[] for _ in range(n)]
     for a, b in und:
         nbr[a].append(b)
         nbr[b].append(a)
+    order = {}
+    for x, c in enumerate(_scc_order(list(range(n)), {v: par[v] for v in range(n)})):
+        for v in c:
+            order[v] = x
 
     def label(mem):
         if geo:
@@ -3497,43 +3513,89 @@ def compute_groups(nodes, par, geo=None, sub_min=40):
         top = max(mem, key=lambda i: (len(nbr[i]), nodes[i]))
         return 'around ' + nodes[top]
 
-    def split(members):
+    def keys_of(mem):
+        ms = set(mem)
+        cut = [(a, b) for a in mem for b in nbr[a] if b not in ms]
+        if not cut:
+            return []
+        k_in, k_out = _min_cover(cut), _min_cover([(b, a) for a, b in cut])
+        return k_out if len(k_out) <= len(k_in) else k_in
+
+    def louvain_parts(members, gamma):
         pos = {v: x for x, v in enumerate(members)}
         e = [(pos[a], pos[b], 1.0) for a in members for b in nbr[a] if b in pos and a < b]
-        lab = _louvain(len(members), e)
+        lab = _louvain(len(members), e, gamma)
         out = defaultdict(list)
         for x, v in enumerate(members):
             out[lab[x]].append(v)
-        res = []
-        for mem in sorted(out.values(), key=lambda m: (-len(m), nodes[m[0]])):
-            ms = set(mem)
-            cut = [(a, b) for a in mem for b in nbr[a] if b not in ms]
-            keys = []
-            if cut:                                   # both minimum; on a tie prefer the outside (shared) side
-                k_in, k_out = _min_cover(cut), _min_cover([(b, a) for a, b in cut])
-                keys = k_out if len(k_out) <= len(k_in) else k_in
-            res.append({'m': mem, 'k': keys, 'lab': label(mem)})
-        return res
+        return list(out.values())
 
-    top = split([i for i in range(n) if nbr[i]])     # variables with no links at all are left out
-    for g in top:
-        if len(g['m']) >= sub_min:
-            sub = split(g['m'])
-            if len(sub) > 1:
-                g['sub'] = sub
-    return {'groups': top}
+    def chunk(items, k, size=lambda x: 1):
+        """k bins, consecutive in the order given, of about equal total size."""
+        tot = sum(size(x) for x in items)
+        bins, cur, acc = [], [], 0
+        for x in items:
+            cur.append(x)
+            acc += size(x)
+            if acc >= tot * (len(bins) + 1) / k and len(bins) < k - 1:
+                bins.append(cur)
+                cur = []
+        if cur:
+            bins.append(cur)
+        return bins
+
+    def split(members):
+        parts = louvain_parts(members, 1.0)
+        g = 1.0
+        while len(parts) < 2 and g < 64:                       # no split: raise the resolution
+            g *= 2
+            parts = louvain_parts(members, g)
+        g = 1.0
+        while len(parts) > maxp and g > 1 / 64:                # too many: lower it
+            g /= 2
+            p2 = louvain_parts(members, g)
+            if len(p2) < 2:
+                break
+            parts = p2
+        if len(parts) > maxp:                                  # still too many: group the groups by link order
+            parts.sort(key=lambda m: min(order[v] for v in m))
+            parts = [sum(b, []) for b in chunk(parts, maxp, size=len)]
+        if len(parts) < 2:                                     # no structure at all: cut along equation order
+            ms = sorted(members, key=lambda v: (order[v], nodes[v]))
+            parts = chunk(ms, min(maxp, max(2, -(-len(ms) // boxes))))
+        return [sorted(m) for m in parts if m]
+
+    def build(members, depth, plab=None):
+        out, seen = [], Counter()
+        for mem in sorted(split(members), key=lambda m: (-len(m), nodes[m[0]])):
+            lab = label(mem)
+            seen[lab] += 1
+            if lab == plab or seen[lab] > 1:                    # keep names in a view distinct
+                lab = '%s (%s)' % (lab, 'core' if lab == plab and seen[lab] == 1 else 'part %d' % seen[lab])
+            node = {'m': mem, 'k': keys_of(mem), 'lab': lab}
+            if len(mem) > boxes and depth < 30 and len(mem) < len(members):
+                node['ch'] = build(mem, depth + 1, label(mem))
+            out.append(node)
+        return out
+
+    linked = [i for i in range(n) if nbr[i]]                   # variables with no links at all are left out
+    tree = build(linked, 0) if len(linked) > boxes else (
+        [{'m': linked, 'k': [], 'lab': 'whole model'}] if linked else [])
+    return {'tree': tree, 'boxes': boxes}
 
 
-def _groups_payload(nodes, M):
+def _groups_payload(nodes, M, boxes=40):
     idx = {n: i for i, n in enumerate(nodes)}
     par = [[idx[p] for p in M.parents.get(n, ()) if p in idx] for n in nodes]
     t = time.time()
-    g = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None))
-    if M.verbose:
-        print('Groups: %d groups (%d split further) in %.1fs' % (len(g['groups']),
-              sum(1 for x in g['groups'] if x.get('sub')), time.time() - t), file=sys.stderr)
-    return g
+    g = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None), boxes=boxes)
 
+    def depth(ts):
+        return 1 + max((depth(x['ch']) for x in ts if x.get('ch')), default=0) if ts else 0
+    if M.verbose:
+        print('Groups: %d top groups, %d levels, at most %d boxes per view, in %.1fs'
+              % (len(g['tree']), depth(g['tree']), g['boxes'], time.time() - t), file=sys.stderr)
+    return g
 
 def _loop_ids(nodes, M):
     """For each report node, the id of its loop (strongly connected component); ids run upstream to downstream."""
@@ -3569,7 +3631,7 @@ def _layers_data(args, nodes, M=None):
             'lp': [L.get(n, z)[4] for n in nodes], 'nx': nx, 'nxa': nxa,
             'xd': {n: [L[n][0], L[n][1]] for n in extra if n in L},
             'cid': _loop_ids(nodes, M) if M is not None else None,
-            'grp': _groups_payload(nodes, M) if M is not None else None,
+            'grp': _groups_payload(nodes, M, getattr(args, 'map_boxes', 40)) if M is not None else None,
             'area': names, 'label': label, 'out': getattr(args, 'area_out', None),
             'max': max((v[0] for v in L.values()), default=0),
             'nall': len(L), 'pruned': bool(getattr(args, 'target', None))}
@@ -4784,7 +4846,7 @@ let KC={};
     {col:i=>-col.get(i),edges:EL,hdr:(L,n)=>`step ${1-L}`,tip:i=>''});
    $('#mch'+k).innerHTML=cs.map((c,j)=>`<div style="margin:3px 0"><b>Chain ${lo+j+1}</b>: ${c.nodes.map(i=>vlink(D.nodes[i])).join(' → ')} <span class="hint">— ${esc(c.label)}</span></div>`).join('');
    nodes.forEach(i=>shownN.add(i))}}
- const HINTS={grp:`<b>Groups joined by key variables.</b> The model is split into groups of variables that are densely linked inside and loosely linked to the rest (Louvain community detection on the equation links). A group's <b>key variables</b> are the fewest variables that every link between it and the rest of the model passes through: a minimum vertex cover of its boundary links (König's theorem). A group joined through one or two key variables is almost a separate model hanging off them. <b>Map 1</b> shows each group as one box, plus only the key variables (🔑) between groups; arrow width = number of links. Groups that hang off exactly the same key variables (e.g. 40 states joined through the same 4 national variables) are bundled into one box. Key variables are drawn for groups joined through 12 or fewer; larger boundaries show as links between group boxes. Click a group or bundle to open it in <b>Map 2</b>; a large group opens as sub-groups, and clicking one opens it in <b>Map 3</b>.`,spc:`<b>Main chains — model structure</b> (main path analysis, search path count). For each link u → v, SPC = N⁻(u) × N⁺(v): the number of distinct chains from any input (a variable with no equation) to u, times the number from v to any end variable. It counts how many input-to-end chains run through the link, so a hub that many chains pass through scores high, and a variable at the top of a single long chain does not. <b>Chain 1</b> starts from the link with the highest SPC and extends backward and forward along the highest-SPC links. <b>Chain 2</b> does the same from the best link not yet used whose starting variable has not started a chain before (so it is not chain 1 again for another state), and so on. Loops count as one step. Same for every scenario.`,
+ const HINTS={grp:`<b>Groups joined by key variables</b>, like zooming a map. The model is split into groups of variables that are densely linked inside and loosely linked to the rest (Louvain community detection on the equation links), and each group again, as many levels as needed, until every view has at most ${(Y.grp&&Y.grp.boxes)||40} boxes (<code>--map-boxes</code>). A group's <b>key variables</b> (🔑) are the fewest variables that every link between it and the rest of the model passes through: a minimum vertex cover of its boundary links (König's theorem). A group joined through one or two key variables is almost a separate model hanging off them. Each view shows the groups as boxes plus the key variables between them; arrow width = number of links. Groups that hang off exactly the same keys (e.g. 40 states joined through the same 4 national variables) are bundled. Click a box to zoom in; the path above the map takes you back. Nothing is hard-coded: groups come from the equations alone.`,spc:`<b>Main chains — model structure</b> (main path analysis, search path count). For each link u → v, SPC = N⁻(u) × N⁺(v): the number of distinct chains from any input (a variable with no equation) to u, times the number from v to any end variable. It counts how many input-to-end chains run through the link, so a hub that many chains pass through scores high, and a variable at the top of a single long chain does not. <b>Chain 1</b> starts from the link with the highest SPC and extends backward and forward along the highest-SPC links. <b>Chain 2</b> does the same from the best link not yet used whose starting variable has not started a chain before (so it is not chain 1 again for another state), and so on. Loops count as one step. Same for every scenario.`,
   flow:`<b>Main chains — this scenario's gap</b>. Each link u → v is weighted by how many variables' gaps B − A travel through it: s(u→v) × N(v), where s(u→v) is the share of v's gap that comes from u, and N(v) = 1 + Σ s(v→w) × N(w) is the share-weighted number of changed variables whose gap comes through v (v itself included). It has no units, so rates and levels compare fairly. <b>Chain 1</b> starts from the heaviest link and extends backward along the input that explains most of each variable's gap (back to the shock) and forward along the heaviest links. <b>Chain 2</b> starts from the heaviest link not yet used whose starting variable has not started a chain before, and so on. This is where the difference between the scenarios actually travels. Only variables that changed take part.`,
   lay:`<b>Longest chain (layers)</b>. <b>Map 1</b> is the core: variables whose longest chain has the most layers. <b>Map 2</b> shows the next tier that Map 1 feeds directly, <b>Map 3</b> the tier after that. Dashed boxes on the left are the variables from the map above that feed it. Click a box to narrow the next map to what that variable reaches.`};
  // groups joined by key variables (Louvain groups, minimum vertex cover as key variables)
@@ -4800,11 +4862,11 @@ let KC={};
   // tarjan numbers components in reverse topological order: process from the last (upstream) to 0
   const order=[...Array(nc).keys()].reverse();const L=new Map();order.forEach(c=>{let m=0;cin[c].forEach(a=>{m=Math.max(m,(L.get(a)??0)+1)});L.set(c,m)});
   ids.forEach(v=>col.set(v,L.get(comp.get(v))||0));return col}
- function drawGroupMap(k,groups,note,parentSet,bundle){const el=$('#lmap'+k),K=Math.max(1,+$('#gk').value||2),cap=Math.max(20,+$('#mn').value||200);
+ function drawGroupMap(k,groups,note,parentSet,bundle,onPick){const el=$('#lmap'+k),K=Math.max(1,+$('#gk').value||2),cap=Math.max(20,+$('#mn').value||200);
   $('#mnote'+k).textContent=note;if(!groups.length){el.innerHTML='';return}
   const kc=new Map();groups.forEach(g=>{if(g.k.length<=Math.max(K,12))g.k.forEach(i=>kc.set(i,(kc.get(i)||0)+1))});
-  const keys=[...kc.keys()].sort((a,b)=>kc.get(b)-kc.get(a)||CH[b].length-CH[a].length).slice(0,cap),ks=new Set(keys);
-  const bk=new Map(),bOf=new Map(),BUN=[];if(bundle){groups.forEach((g,j)=>{if(!g.k.length||g.sub)return;const key=g.k.join(',');if(!bk.has(key))bk.set(key,[]);bk.get(key).push(j)});
+  const BOX=(Y.grp&&Y.grp.boxes)||40,keys=[...kc.keys()].sort((a,b)=>kc.get(b)-kc.get(a)||CH[b].length-CH[a].length).slice(0,Math.max(4,Math.min(cap,BOX-groups.length))),ks=new Set(keys);
+  const bk=new Map(),bOf=new Map(),BUN=[];if(bundle){groups.forEach((g,j)=>{if(!g.k.length||g.ch)return;const key=g.k.join(',');if(!bk.has(key))bk.set(key,[]);bk.get(key).push(j)});
    bk.forEach(js=>{if(js.length>=3){const b=BUN.length;BUN.push(js);js.forEach(j=>bOf.set(j,b))}})}
   const disp=new Map();groups.forEach((g,j)=>g.m.forEach(i=>{if(!ks.has(i))disp.set(i,bOf.has(j)?'b'+bOf.get(j):'g'+j)}));keys.forEach(i=>disp.set(i,'v'+i));GBUN[k]=BUN;
   const ids=[...new Set(disp.values())],cnt=new Map();
@@ -4825,44 +4887,40 @@ let KC={};
   let nd='';ids.forEach(d=>{const p=P.get(d);if(d[0]==='b'){const b=+d.slice(1),js=BUN[b],gs_=js.map(j=>groups[j]),nk=gs_[0].k.length,iso=nk<=K,nv=gs_.reduce((t,g)=>t+g.m.length,0),sel=GSEL[k]==='b'+b,ch=gs_.reduce((t,g)=>t+g.m.filter(i=>ROW[D.nodes[i]]).length,0);
     nd+=`<g class="gb" data-s="b${b}" style="cursor:pointer"><title>${js.length} groups that hang off the same ${nk} key variable${nk===1?'':'s'} (${gs_[0].k.map(i=>D.nodes[i]).join(', ')}): ${gs_.map(g=>g.lab).join(', ')}. ${nv} variables. Click to list them.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="9" fill="var(--card)" stroke="${sel?'var(--b)':iso?'var(--a)':'var(--mut)'}" stroke-width="${sel?3:iso?2.2:1.2}" stroke-opacity="${sel||iso?1:.6}"/><rect x="${p.x+4}" y="${p.y+4}" width="${BW}" height="${GH}" rx="9" fill="none" stroke="var(--mut)" stroke-opacity=".35"/><text x="${p.x+8}" y="${p.y+16}" font-size="11.5" font-weight="600" fill="var(--fg)">${js.length} similar groups · ${nv}</text><text x="${p.x+8}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${(()=>{const t=`via ${nk} key${nk===1?'':'s'} · `,e=gs_.map(g=>g.lab.replace(/^around /,'')).join(', ');return esc(t+(e.length>28-t.length?e.slice(0,27-t.length)+'…':e))})()}</text></g>`}
    else if(d[0]==='g'){const j=+d.slice(1),g=groups[j],iso=g.k.length<=K,ch=g.m.filter(i=>ROW[D.nodes[i]]).length,sel=GSEL[k]==='g'+j;
-    nd+=`<g class="gb" data-s="g${j}" style="cursor:pointer"><title>${esc(g.lab)}: ${g.m.length} variables (${ch} changed), joined to the rest through ${g.k.length} key variable${g.k.length===1?'':'s'}: ${g.k.slice(0,12).map(i=>D.nodes[i]).join(', ')}${g.k.length>12?', …':''}. Click to open.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="9" fill="var(--card)" stroke="${sel?'var(--b)':iso?'var(--a)':'var(--mut)'}" stroke-width="${sel?3:iso?2.2:1}" stroke-opacity="${sel||iso?1:.5}"/><text x="${p.x+8}" y="${p.y+16}" font-size="11.5" font-weight="600" fill="var(--fg)">${esc((g.lab.length>20?g.lab.slice(0,19)+'…':g.lab))} · ${g.m.length}</text><text x="${p.x+8}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${ch} changed · via ${g.k.length} key${g.k.length===1?'':'s'}${g.sub?' · ▸ sub-groups':''}</text></g>`}
+    nd+=`<g class="gb" data-s="g${j}" style="cursor:pointer"><title>${esc(g.lab)}: ${g.m.length} variables (${ch} changed), joined to the rest through ${g.k.length} key variable${g.k.length===1?'':'s'}: ${g.k.slice(0,12).map(i=>D.nodes[i]).join(', ')}${g.k.length>12?', …':''}. Click to open.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="9" fill="var(--card)" stroke="${sel?'var(--b)':iso?'var(--a)':'var(--mut)'}" stroke-width="${sel?3:iso?2.2:1}" stroke-opacity="${sel||iso?1:.5}"/><text x="${p.x+8}" y="${p.y+16}" font-size="11.5" font-weight="600" fill="var(--fg)">${esc((g.lab.length>20?g.lab.slice(0,19)+'…':g.lab))} · ${g.m.length}</text><text x="${p.x+8}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${ch} changed · via ${g.k.length} key${g.k.length===1?'':'s'}${g.ch?' · ▸':''}</text></g>`}
    else{const i=+d.slice(1),n=D.nodes[i],g=gapOf(n),out=parentSet&&!parentSet.has(i);
     nd+=`<g class="ln" data-n="${esc(n)}" style="cursor:pointer"><title>${esc(n)}: key variable for ${kc.get(i)} group${kc.get(i)>1?'s':''}${g!=null?`, gap ${pct(g)}`:', unchanged'}${out?' (outside this group)':''}. Double-click for details.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${gapCol(g)}" stroke="var(--fg)" stroke-opacity=".55" stroke-width="1.4"${out?' stroke-dasharray="4 3"':''}/><text x="${p.x+6}" y="${p.y+17}" font-size="11" font-weight="600" fill="var(--fg)">🔑 ${esc(n.length>21?n.slice(0,20)+'…':n)}</text></g>`}});
   const S=LVS[k];S.full=[0,0,W,H+10];S.v=S.full.slice();const cw=$('#t-lay').clientWidth||1100,w=Math.min(cw,Math.round(W*1.1));
   el.innerHTML=`<svg id="lsvg${k}" viewBox="${S.v.join(' ')}" style="width:${w}px;max-width:100%;height:${Math.round(Math.min(700,Math.max(140,w*(H+10)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="lg${k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--mut)"/></marker></defs>${ed}${nd}</svg>`;
   const sv=$('#lsvg'+k);panZoom(sv,S,'[data-lz'+k+']','lz'+k);
-  sv.addEventListener('click',e=>{const b=e.target.closest('.gb');if(!b)return;const j=b.dataset.s;GSEL[k]=GSEL[k]===j?null:j;if(k===1)GSEL[2]=null;drawAll()});
+  sv.addEventListener('click',e=>{const b=e.target.closest('.gb');if(!b)return;const j=b.dataset.s;if(onPick){onPick(j,GBUN[k]);return}GSEL[k]=GSEL[k]===j?null:j;if(k===1)GSEL[2]=null;drawAll()});
   sv.addEventListener('dblclick',e=>{const g=e.target.closest('.ln');if(g)show(g.dataset.n)})}
  function drawInside(k,mem,keys,title){const cap=Math.max(20,+$('#mn').value||200),ms=new Set(mem),ksS=new Set(keys);
-  let ids=mem.slice().sort((a,b)=>(ksS.has(b)-ksS.has(a))||Math.abs(gapOf(D.nodes[b])||0)-Math.abs(gapOf(D.nodes[a])||0)).slice(0,cap);const is=new Set(ids);
+  let ids=mem.slice().sort((a,b)=>(ksS.has(b)-ksS.has(a))||Math.abs(gapOf(D.nodes[b])||0)-Math.abs(gapOf(D.nodes[a])||0)).slice(0,Math.min(cap,(Y.grp&&Y.grp.boxes)||cap));const is=new Set(ids);
   const out=new Map();ids.forEach(v=>{D.par[v].forEach(u=>{if(!ms.has(u))out.set(u,'in')});CH[v].forEach(w=>{if(!ms.has(w)&&!out.has(w))out.set(w,'out')})});
-  const gh=[...out.keys()].sort((a,b)=>(ksS.has(b)-ksS.has(a))||CH[b].length-CH[a].length).slice(0,30),gs=new Set(gh),all=new Set([...ids,...gh]);
+  const gh=[...out.keys()].sort((a,b)=>(ksS.has(b)-ksS.has(a))||CH[b].length-CH[a].length).slice(0,Math.max(6,((Y.grp&&Y.grp.boxes)||40)-ids.length)),gs=new Set(gh),all=new Set([...ids,...gh]);
   const EL=[];all.forEach(v=>D.par[v].forEach(u=>{if(all.has(u)&&(is.has(u)||is.has(v)))EL.push([u,v])}));
   const col=layerCols([...is],EL.filter(([u,v])=>is.has(u)&&is.has(v)));const mx=Math.max(0,...col.values());
   draw(k,ids,gh,false,`${title}: ${mem.length} variables${mem.length>ids.length?`, showing ${ids.length}`:''}. Dashed boxes are outside variables linked to it (key variables first).`,
    {col:i=>gs.has(i)?(out.get(i)==='in'?1:-(mx+1)):-col.get(i),edges:EL,hdr:(L,n)=>L===1?'outside, feeding in':L===-(mx+1)?'outside, fed by it':`step ${1-L}`,tip:i=>ksS.has(i)?' — key variable':''})}
- function drawGroups(){const G=Y.grp?Y.grp.groups:[],K=Math.max(1,+$('#gk').value||2),only=$('#gonly').checked;
-  [1,2,3].forEach(k=>{$('#mch'+k).innerHTML='';$('#mf'+k).innerHTML=''});
-  const top=only?G.filter(g=>g.k.length&&g.k.length<=K):G,clear=k=>{$('#mh'+k).textContent='Map '+k;$('#lmap'+k).innerHTML=''};
-  $('#mh1').textContent='Map 1 — groups and the key variables joining them';
-  drawGroupMap(1,top,`${G.length} groups; ${G.filter(g=>g.k.length&&g.k.length<=K).length} are joined to the rest through ${K} key variable${K>1?'s':''} or fewer (thick border).${only?' Showing only those.':''} Groups that hang off exactly the same key variables are bundled. Click a box to open it.`,null,true);
-  const chip=(k,t)=>{$('#mf'+k).innerHTML=`<span class="badge" style="cursor:pointer" data-gx="${k-1}">${esc(t)} ✕</span>`};
-  const s1=GSEL[1];if(!s1){clear(2);$('#mnote2').textContent='Click a group or bundle in Map 1 to open it here.';clear(3);$('#mnote3').textContent='';return}
-  let lvl2=null;  // groups shown in Map 2 (if it is a group map)
-  if(s1[0]==='b'){const js=GBUN[1][+s1.slice(1)]||[],gs_=js.map(j=>top[j]);lvl2=gs_;chip(2,`${gs_.length} similar groups`);
-   $('#mh2').textContent=`Map 2 — ${gs_.length} groups hanging off the same key variables`;
-   drawGroupMap(2,gs_,`Each joined to the rest through ${gs_[0].k.map(i=>D.nodes[i]).join(', ')}. Click a group to open it in Map 3.`,null,false)}
-  else{const g1=top[+s1.slice(1)];if(!g1){clear(2);clear(3);return}chip(2,g1.lab);
-   if(g1.sub){lvl2=g1.sub;$('#mh2').textContent=`Map 2 — inside ${g1.lab}: sub-groups`;
-    drawGroupMap(2,g1.sub,`${g1.m.length} variables in ${g1.sub.length} sub-groups, joined to the rest of the model through ${g1.k.length} key variable${g1.k.length===1?'':'s'}. Dashed keys are outside this group. Click a sub-group to open it in Map 3.`,new Set(g1.m),true)}
-   else{$('#mh2').textContent=`Map 2 — inside ${g1.lab}`;drawInside(2,g1.m,g1.k,g1.lab);clear(3);$('#mnote3').textContent='This group is small enough to show in one map.';return}}
-  const s2=GSEL[2];if(!s2){clear(3);$('#mnote3').textContent='Click a box in Map 2 to open it here.';return}
-  let gs3=s2[0]==='b'?(GBUN[2][+s2.slice(1)]||[]).map(j=>lvl2[j]):[lvl2[+s2.slice(1)]];gs3=gs3.filter(Boolean);if(!gs3.length){clear(3);return}
-  if(gs3.length===1){const g2=gs3[0];chip(3,g2.lab);$('#mh3').textContent=`Map 3 — inside ${g2.lab}`;drawInside(3,g2.m,g2.k,g2.lab)}
-  else{chip(3,`${gs3.length} similar groups`);$('#mh3').textContent=`Map 3 — ${gs3.length} groups hanging off the same key variables`;drawGroupMap(3,gs3,'Groups in this bundle.',null,false)}}
+ let GPATH=[];   // zoom path: list of {lab, ch|m, k}
+ function showSlots(n){[1,2,3].forEach(k=>{const on=k<=n;['#mh'+k,'#mnote'+k,'#lmap'+k,'#mch'+k].forEach(x=>{const e=$(x);if(e)e.style.display=on?'':'none'});const c=$('#mf'+k);if(c&&c.parentElement)c.parentElement.style.display=on?'':'none'})}
+ function drawGroups(){const T=Y.grp?(Y.grp.tree||[]):[],K=Math.max(1,+$('#gk').value||2),only=$('#gonly').checked,BOX=(Y.grp&&Y.grp.boxes)||40;
+  showSlots(1);$('#mch1').innerHTML='';
+  const root=(T.length===1&&!T[0].ch)?Object.assign({},T[0],{lab:'Whole model'}):{lab:'Whole model',ch:T,k:[]},path=[root,...GPATH],cur=path[path.length-1];
+  $('#mf1').innerHTML=path.map((p,x)=>x===path.length-1?`<b>${esc(p.lab)}</b>`:`<a href="#" data-gp="${x}">${esc(p.lab)}</a>`).join(' › ');
+  $('#mh1').textContent=path.length===1?'Map of the model':`Inside ${cur.lab}`;
+  const iso=g=>g.k.length&&g.k.length<=K;
+  if(cur.ch){let gs=cur.ch;if(only&&path.length===1)gs=gs.filter(iso);
+   const nm=cur.m?cur.m.length:gs.reduce((t,g)=>t+g.m.length,0);
+   drawGroupMap(1,gs,`${nm.toLocaleString()} variables in ${gs.length} group${gs.length===1?'':'s'}${path.length>1?`, joined to the rest of the model through ${cur.k.length} key variable${cur.k.length===1?'':'s'}`:''}. ${gs.filter(iso).length} of these groups are joined through ${K} key variable${K>1?'s':''} or fewer (thick border). Groups hanging off exactly the same keys are bundled. Click a box to zoom in (▸ = has more levels); use the path above to go back. At most ${BOX} boxes per view.`,
+    cur.m?new Set(cur.m):null,true,(sel,bun)=>{if(sel[0]==='b'){const js=bun[+sel.slice(1)]||[],gg=js.map(j=>gs[j]);GPATH.push({lab:`${gg.length} similar groups`,ch:gg,m:gg.flatMap(g=>g.m),k:gg[0].k})}else GPATH.push(gs[+sel.slice(1)]);drawAll()})}
+  else drawInside(1,cur.m,cur.k,cur.lab)}
+ $('#t-lay').addEventListener('click',e=>{const a=e.target.closest('[data-gp]');if(a){e.preventDefault();GPATH=GPATH.slice(0,+a.dataset.gp);drawAll()}});
  $('#t-lay').addEventListener('click',e=>{const c=e.target.closest('[data-gx]');if(c){const k=+c.dataset.gx;GSEL[k]=null;if(k===1)GSEL[2]=null;drawAll()}});
  function drawAll(){const m=$('#mby').value;$('#mhint').innerHTML=HINTS[m]+` Colour is the gap at the end (green up, red down, grey unchanged). Double-click a box for its details. Scroll to zoom, drag to move.`;
   $('#mcc').style.display=(m==='spc'||m==='flow')?'':'none';$('#mcl').style.display=m==='lay'?'':'none';$('#mcg').style.display=m==='grp'?'':'none';
+  if(m!=='grp')showSlots(3);
   if(m==='lay'){[1,2,3].forEach(k=>$('#mch'+k).innerHTML='');drawMaps()}else if(m==='grp')drawGroups();else drawChains(m)}
  function drawMaps(){const a=meas(),cap=Math.max(20,+$('#mn').value||200),link=$('#mlink').checked;
   let t1=Math.max(2,+$('#t1').value||2),t2=Math.max(1,Math.min(t1-1,+$('#t2').value||1));
@@ -4881,7 +4939,7 @@ let KC={};
    {const fk=k>1?(FOC[k-1]!=null?k-1:(k===3&&FOC[1]!=null?1:null)):null;$('#mf'+k).innerHTML=fk!=null?`<span class="badge" style="cursor:pointer" data-cf="${fk}">narrowed to ${esc(D.nodes[FOC[fk]])} ✕</span>`:''}
    draw(k,ids,ghosts,a,total?`${total.toLocaleString()} variables${extra}${k>1&&!extra&&link?` linked to Map ${k-1}`:''}${total>cap?`; showing the ${cap} with the most layers and largest gaps`:''}.`:`No variables${extra} in this tier.`)}}
  $('#t-lay').addEventListener('click',e=>{const c=e.target.closest('[data-cf]');if(c){FOC[+c.dataset.cf]=null;if(c.dataset.cf==='1')FOC[2]=null;drawAll()}});
- ['#t1','#t2','#mn','#mlink','#c1','#c2','#c3','#mby','#gk','#gonly'].forEach(s=>$(s).addEventListener('input',()=>{FOC[1]=FOC[2]=null;GSEL[1]=GSEL[2]=null;drawAll()}));
+ ['#t1','#t2','#mn','#mlink','#c1','#c2','#c3','#mby','#gk','#gonly'].forEach(s=>$(s).addEventListener('input',e=>{FOC[1]=FOC[2]=null;GSEL[1]=GSEL[2]=null;if(e.target.id==='mby')GPATH=[];drawAll()}));
  if($('#lm'))$('#lm').addEventListener('input',()=>RC.clear());
  drawAll();
 })();
@@ -5430,6 +5488,8 @@ def main(argv=None):
         sp.add_argument('--target-exog', action='store_true',
                         help='with --target: treat every variable outside the target as exogenous (taken from '
                              'each scenario), so only the target\'s own equations are solved')
+        sp.add_argument('--map-boxes', type=int, default=40,
+                        help='most boxes in one view of the group maps; groups are split into more levels to fit')
         sp.add_argument('--area', action='append', metavar='SPEC',
                         help='area for the Layers tab: longest chains that end in these variables (geography code, '
                              'wildcard or names; default: --target)')
@@ -5555,8 +5615,8 @@ def main(argv=None):
 
     sp = sub.add_parser('groups', help='groups of variables joined to the rest through few key variables')
     common(sp)
-    sp.add_argument('-n', type=int, default=30, help='groups to list')
-    sp.add_argument('--sub', type=int, default=5, help='sub-groups to list per group')
+    sp.add_argument('-n', type=int, default=60, help='groups to list')
+    sp.add_argument('--depth', type=int, default=2, help='levels of the tree to list')
     sp.add_argument('--max-keys', type=int, default=2, help='"isolated" = joined through this many key variables or fewer')
 
     sp = sub.add_parser('mask', help='print equations with error-term brackets with names/numbers hidden (safe to share)')
