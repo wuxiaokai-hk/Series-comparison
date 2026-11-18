@@ -1431,6 +1431,9 @@ def parse_equation_line(raw, source):
           .replace('\uff0b', '+').replace('\uff3b', '[').replace('\uff3d', ']').replace('\uff08', '(')
           .replace('\uff09', ')').replace('\uff1d', '=').replace('\uff0c', ',').replace('\u3000', ' '))
     s = re.sub('[\u200b\u200c\u200d\u2060\ufeff\u00ad]', '', s)    # invisible characters
+    # scientific notation written with spaces or a D: "1.5E -05", "1.5 E-05", "1.5D-05" -> 1.5E-05
+    s = re.sub(r'(?<![A-Za-z0-9_$.%#])(\d+\.?\d*|\.\d+)\s*[eEdD]\s*([-+]?)\s*(\d+)(?![A-Za-z0-9_$.%#(])',
+               lambda m: '%sE%s%s' % (m.group(1), m.group(2), m.group(3)), s)
     s = _strip_comment(s)
     shown = s.strip()                       # what the user sees, error-term options included
     # error terms written as an added term: "... + [ar(1)=0.13, ...]" or "[ar(1)=.1] + ..."
