@@ -4784,8 +4784,9 @@ let KC={};
  <div id="lh"></div><div id="lch"></div><div class="tw"><table><thead><tr><th>Variable</th><th>Type</th><th class="n">Layers</th>${AREA?`<th class="n">Into ${esc(AL)}</th>`:''}<th class="n">Used directly by</th><th class="n">Gap at end</th><th>Longest chain</th></tr></thead><tbody id="lt"></tbody></table></div><div id="lmore"></div>`;
  if(AREA){h+=`<h2>Inputs into ${esc(AL)}</h2><div id="lin"></div>`;if(Y.out)h+=`<h2>What ${esc(AL)} feeds outside</h2><div id="lout"></div>`}
  h+=`<h2>Maps of the model</h2><div class="hint" id="mhint"></div>
- <div class="ctl"><label>Maps by <select id="mby"><option value="grp">groups joined by key variables</option><option value="spc">main chains — model structure</option><option value="flow">main chains — this scenario's gap</option><option value="lay">longest chain (layers)</option></select></label>
+ <div class="ctl"><label>Maps by <select id="mby"><option value="route">main chain, zoomable</option><option value="grp">groups joined by key variables</option><option value="spc">main chains — model structure</option><option value="flow">main chains — this scenario's gap</option><option value="lay">longest chain (layers)</option></select></label>
  <span id="mcc"> &nbsp; Map 1: chain 1 to <input type="number" id="c1" value="1" min="1" style="width:52px"> &nbsp; Map 2: to <input type="number" id="c2" value="4" min="2" style="width:52px"> &nbsp; Map 3: to <input type="number" id="c3" value="12" min="3" style="width:52px"></span>
+ <span id="mcr"> &nbsp; <label>link weights <select id="rw"><option value="flow">this scenario's gap</option><option value="spc">model structure</option></select></label></span>
  <span id="mcg"> &nbsp; isolated = joined through ≤ <input type="number" id="gk" value="2" min="1" style="width:52px"> key variables &nbsp; <label><input type="checkbox" id="gonly"> only isolated groups</label></span>
  <span id="mcl"> &nbsp; Map 1: layers ≥ <input type="number" id="t1" min="2" style="width:60px"> &nbsp; Map 2: layers ≥ <input type="number" id="t2" min="1" style="width:60px"> &nbsp; Map 3: the rest (≥ 1) &nbsp; <label><input type="checkbox" id="mlink" checked> only variables linked to the map above</label></span>
  &nbsp; <label>max boxes per map <input type="number" id="mn" value="200" min="20" max="3000" step="50" style="width:80px"></label></div>
@@ -4895,7 +4896,7 @@ let KC={};
     {col:i=>-col.get(i),edges:EL,hdr:(L,n)=>`step ${1-L}`,tip:i=>''});
    $('#mch'+k).innerHTML=cs.map((c,j)=>`<div style="margin:3px 0"><b>Chain ${lo+j+1}</b>: ${c.nodes.map(i=>vlink(D.nodes[i])).join(' → ')} <span class="hint">— ${esc(c.label)}</span></div>`).join('');
    nodes.forEach(i=>shownN.add(i))}}
- const HINTS={grp:`<b>Groups joined by key variables</b>, like zooming a map. The model is split into groups of variables that are densely linked inside and loosely linked to the rest (Louvain community detection on the equation links), and each group again, as many levels as needed, until every view has at most ${(Y.grp&&Y.grp.boxes)||40} boxes (<code>--map-boxes</code>). A group's <b>key variables</b> (🔑) are the fewest variables that every link between it and the rest of the model passes through: a minimum vertex cover of its boundary links (König's theorem). A group joined through one or two key variables is almost a separate model hanging off them. Each view shows the groups as boxes plus the key variables between them; arrow width = number of links. Groups that hang off exactly the same keys (e.g. 40 states joined through the same 4 national variables) are bundled. Click a box to zoom in; the path above the map takes you back. Nothing is hard-coded: groups come from the equations alone.`,spc:`<b>Main chains — model structure</b> (main path analysis, search path count). For each link u → v, SPC = N⁻(u) × N⁺(v): the number of distinct chains from any input (a variable with no equation) to u, times the number from v to any end variable. It counts how many input-to-end chains run through the link, so a hub that many chains pass through scores high, and a variable at the top of a single long chain does not. <b>Chain 1</b> starts from the link with the highest SPC and extends backward and forward along the highest-SPC links. <b>Chain 2</b> does the same from the best link not yet used whose starting variable has not started a chain before (so it is not chain 1 again for another state), and so on. Loops count as one step. Same for every scenario.`,
+ const HINTS={route:`<b>Main chain, zoomable</b>, like directions on a map. At the top, the model's groups (by geography when the names have one, otherwise by links) and the main chain through them: it starts at the heaviest link between groups and extends along the heaviest links (until a link is under 5% of the first). <b>Click a step</b> to see the chain inside it: it starts where the links from the step before enter that group and ends where links leave for the next step, so the detail continues the same route. Inside, the chain is the <b>widest path</b>, the route whose weakest link is strongest. Keep clicking down to single variables. Link weights: <b>this scenario's gap</b> = s(u→v) × N(v), how many changed variables' gaps travel through the link; or <b>model structure</b> = search path count, how many input-to-end chains run through it. The path above the map goes back up.`,grp:`<b>Groups joined by key variables</b>, like zooming a map. The model is split into groups of variables that are densely linked inside and loosely linked to the rest (Louvain community detection on the equation links), and each group again, as many levels as needed, until every view has at most ${(Y.grp&&Y.grp.boxes)||40} boxes (<code>--map-boxes</code>). A group's <b>key variables</b> (🔑) are the fewest variables that every link between it and the rest of the model passes through: a minimum vertex cover of its boundary links (König's theorem). A group joined through one or two key variables is almost a separate model hanging off them. Each view shows the groups as boxes plus the key variables between them; arrow width = number of links. Groups that hang off exactly the same keys (e.g. 40 states joined through the same 4 national variables) are bundled. Click a box to zoom in; the path above the map takes you back. Nothing is hard-coded: groups come from the equations alone.`,spc:`<b>Main chains — model structure</b> (main path analysis, search path count). For each link u → v, SPC = N⁻(u) × N⁺(v): the number of distinct chains from any input (a variable with no equation) to u, times the number from v to any end variable. It counts how many input-to-end chains run through the link, so a hub that many chains pass through scores high, and a variable at the top of a single long chain does not. <b>Chain 1</b> starts from the link with the highest SPC and extends backward and forward along the highest-SPC links. <b>Chain 2</b> does the same from the best link not yet used whose starting variable has not started a chain before (so it is not chain 1 again for another state), and so on. Loops count as one step. Same for every scenario.`,
   flow:`<b>Main chains — this scenario's gap</b>. Each link u → v is weighted by how many variables' gaps B − A travel through it: s(u→v) × N(v), where s(u→v) is the share of v's gap that comes from u, and N(v) = 1 + Σ s(v→w) × N(w) is the share-weighted number of changed variables whose gap comes through v (v itself included). It has no units, so rates and levels compare fairly. <b>Chain 1</b> starts from the heaviest link and extends backward along the input that explains most of each variable's gap (back to the shock) and forward along the heaviest links. <b>Chain 2</b> starts from the heaviest link not yet used whose starting variable has not started a chain before, and so on. This is where the difference between the scenarios actually travels. Only variables that changed take part.`,
   lay:`<b>Longest chain (layers)</b>. <b>Map 1</b> is the core: variables whose longest chain has the most layers. <b>Map 2</b> shows the next tier that Map 1 feeds directly, <b>Map 3</b> the tier after that. Dashed boxes on the left are the variables from the map above that feed it. Click a box to narrow the next map to what that variable reaches.`};
  // groups joined by key variables (Louvain groups, minimum vertex cover as key variables)
@@ -4967,10 +4968,93 @@ let KC={};
   else drawInside(1,cur.m,cur.k,cur.lab)}
  $('#t-lay').addEventListener('click',e=>{const a=e.target.closest('[data-gp]');if(a){e.preventDefault();GPATH=GPATH.slice(0,+a.dataset.gp);drawAll()}});
  $('#t-lay').addEventListener('click',e=>{const c=e.target.closest('[data-gx]');if(c){const k=+c.dataset.gx;GSEL[k]=null;if(k===1)GSEL[2]=null;drawAll()}});
+ // ---- main chain, zoomable: a route through the groups; click a step to see the route inside it
+ let RPATH=[];const RW={};
+ function linkWeights(mode){if(RW[mode])return RW[mode];const E=[];
+  if(mode==='spc'){const nc=Math.max(0,...CID)+1,inC=Array.from({length:nc},()=>new Set()),outC=Array.from({length:nc},()=>new Set());
+   for(let v=0;v<N;v++)for(const u of D.par[v])if(CID[u]!==CID[v]){inC[CID[v]].add(CID[u]);outC[CID[u]].add(CID[v])}
+   const lse=a=>{if(!a.length)return 0;let m=-Infinity;for(const x of a)if(x>m)m=x;let t=0;for(const x of a)t+=Math.exp(x-m);return m+Math.log(t)};
+   const lm=new Float64Array(nc),lp=new Float64Array(nc);for(let c=0;c<nc;c++){const a=[];inC[c].forEach(q=>a.push(lm[q]));lm[c]=lse(a)}
+   for(let c=nc-1;c>=0;c--){const a=[];outC[c].forEach(q=>a.push(lp[q]));lp[c]=lse(a)}
+   let mx=-Infinity;const raw=[];for(let v=0;v<N;v++)for(const u of D.par[v])if(u!==v){const x=lm[CID[u]]+lp[CID[v]];raw.push([u,v,x]);if(x>mx)mx=x}
+   raw.forEach(([u,v,x])=>E.push([u,v,Math.exp(x-mx)]))}
+  else{chainsFor('flow',1);const sh=new Map();for(const k in D.esh){const L=D.esh[k],tot=Math.max(1,L.reduce((t,z)=>t+Math.abs(z[1]||0),0));L.forEach(([u,x])=>{const w=Math.abs(x||0)/tot;if(w>0)sh.set(u*N+ +k,w)})}
+   for(let v=0;v<N;v++)for(const u of D.par[v]){const w=sh.get(u*N+v);if(w&&ROW[D.nodes[v]])E.push([u,v,w*NF[v]])}}
+  const out=new Map(),inn=new Map();E.forEach(([u,v,w])=>{if(!out.has(u))out.set(u,[]);out.get(u).push([v,w]);if(!inn.has(v))inn.set(v,[]);inn.get(v).push([u,w])});
+  return RW[mode]={E,out,inn}}
+ function routeIn(cont,prev,next,mode){   // children of cont, chain of child indices
+  const W=linkWeights(mode),kids=cont.ch?cont.ch:cont.m.map(i=>({m:[i],v:i,lab:D.nodes[i]})),own=new Map();kids.forEach((c,x)=>c.m.forEach(i=>own.set(i,x)));
+  const K=kids.length,agg=Array.from({length:K},()=>new Map()),ent=new Float64Array(K),ext=new Float64Array(K),inOut=new Float64Array(K),outOut=new Float64Array(K),inIn=new Float64Array(K),outIn=new Float64Array(K);
+  own.forEach((x,u)=>{for(const [v,w] of W.out.get(u)||[]){const y=own.get(v);if(y!=null){if(y!==x){agg[x].set(y,(agg[x].get(y)||0)+w);outIn[x]+=w;inIn[y]+=w}}else{outOut[x]+=w;if(next&&next.has(v))ext[x]+=w}}
+   for(const [q,w] of W.inn.get(u)||[]){if(own.has(q))continue;inOut[x]+=w;if(prev&&prev.has(q))ent[x]+=w}});
+  if(K===1)return {kids,chain:[0],agg};
+  let starts,ends;
+  if(prev){starts=[...Array(K).keys()].filter(x=>ent[x]>0)}
+  if(!starts||!starts.length){starts=[...Array(K).keys()].filter(x=>inOut[x]>0);if(!starts.length)starts=[...Array(K).keys()].filter(x=>inIn[x]===0)}
+  if(next){ends=[...Array(K).keys()].filter(x=>ext[x]>0)}
+  if(!ends||!ends.length){ends=[...Array(K).keys()].filter(x=>outOut[x]>0);if(!ends.length)ends=[...Array(K).keys()].filter(x=>outIn[x]===0)}
+  if(!prev&&!next){   // top of the route: key route from the heaviest link, extended both ways
+   let best=null;agg.forEach((m,x)=>m.forEach((w,y)=>{if(!best||w>best[2])best=[x,y,w]}));if(!best)return {kids,chain:[0],agg};
+   const ch=[best[0],best[1]],seen=new Set(ch),thr=best[2]*0.05;
+   for(;;){const h=ch[0];let b=null;agg.forEach((m,x)=>{const w=m.get(h);if(w&&!seen.has(x)&&w>=thr&&(!b||w>b[1]))b=[x,w]});if(!b)break;ch.unshift(b[0]);seen.add(b[0])}
+   for(;;){const t=ch[ch.length-1];let b=null;agg[t].forEach((w,y)=>{if(!seen.has(y)&&w>=thr&&(!b||w>b[1]))b=[y,w]});if(!b)break;ch.push(b[0]);seen.add(b[0])}
+   return {kids,chain:ch,agg}}
+  const grow=(ch,seen,thr,fwd)=>{for(;;){const e=fwd?ch[ch.length-1]:ch[0];let b=null;
+    if(fwd)agg[e].forEach((w,y)=>{if(!seen.has(y)&&w>=thr&&(!b||w>b[1]))b=[y,w]});else agg.forEach((m,x)=>{const w=m.get(e);if(w&&!seen.has(x)&&w>=thr&&(!b||w>b[1]))b=[x,w]});
+    if(!b)return ch;fwd?ch.push(b[0]):ch.unshift(b[0]);seen.add(b[0])}};
+  if(prev&&!next){   // last step of the route: enter from the step before, then follow the heaviest links
+   const s0=starts.reduce((a,x)=>ent[x]>ent[a]?x:a,starts[0]);const mx=Math.max(ent[s0],...[...agg[s0].values()],0);
+   return {kids,chain:grow([s0],new Set([s0]),mx*0.05,true),agg}}
+  if(next&&!prev){   // first step: follow the heaviest links back from where it leaves for the next step
+   const e0=ends.reduce((a,x)=>ext[x]>ext[a]?x:a,ends[0]);let mx=ext[e0];agg.forEach(m=>{const w=m.get(e0);if(w>mx)mx=w});
+   return {kids,chain:grow([e0],new Set([e0]),mx*0.05,false),agg}}
+  // widest path from starts to ends: the route whose weakest link is strongest
+  const wid=new Float64Array(K).fill(-1),pred=new Int32Array(K).fill(-1),done=new Uint8Array(K);
+  starts.forEach(x=>wid[x]=prev?ent[x]:Infinity);
+  for(let it=0;it<K;it++){let u=-1;for(let x=0;x<K;x++)if(!done[x]&&wid[x]>=0&&(u<0||wid[x]>wid[u]))u=x;if(u<0)break;done[u]=1;
+   agg[u].forEach((w,y)=>{const c=Math.min(wid[u],w);if(c>wid[y]){wid[y]=c;pred[y]=u}})}
+  let t=-1,tv=-1;ends.forEach(x=>{if(wid[x]<0)return;const v=next?Math.min(wid[x],ext[x]):wid[x];if(v>tv){tv=v;t=x}});
+  if(t<0){t=starts.reduce((a,x)=>(ent[x]+inOut[x])>(ent[a]+inOut[a])?x:a,starts[0]??0)}
+  const ch=[];for(let x=t,g=0;x>=0&&g<K;x=pred[x],g++)ch.unshift(x);
+  return {kids,chain:ch,agg}}
+ function drawRoute(){const mode=$('#rw').value,T=Y.grp?(Y.grp.tree||[]):[];showSlots(1);$('#mch1').innerHTML='';
+  const root=(T.length===1&&!T[0].ch)?Object.assign({},T[0],{lab:'Whole model'}):{lab:'Whole model',ch:T,m:[...new Set(T.flatMap(g=>g.m))]};
+  const path=[{node:root,prev:null,next:null},...RPATH],cur=path[path.length-1];
+  $('#mf1').innerHTML=path.map((p,x)=>x===path.length-1?`<b>${esc(p.lab||p.node.lab)}</b>`:`<a href="#" data-rp="${x}">${esc(p.lab||p.node.lab)}</a>`).join(' › ');
+  const W=linkWeights(mode);
+  if(!W.E.length){$('#mh1').textContent='Main chain';$('#mnote1').textContent=mode==='flow'?'No link carries any of the gap between the scenarios. Switch link weights to "model structure".':'No links.';$('#lmap1').innerHTML='';return}
+  const R=routeIn(cur.node,cur.prev,cur.next,mode),kids=R.kids,ch=R.chain;
+  $('#mh1').textContent=path.length===1?'Main chain of the model':`Main chain inside ${cur.node.lab}`;
+  const nOther=kids.length-ch.length;
+  $('#mnote1').innerHTML=`${ch.length} step${ch.length===1?'':'s'}${nOther>0?` (${nOther} other ${cur.node.ch?'group':'variable'}${nOther===1?'':'s'} at this level are off the main chain)`:''}. ${cur.prev?`Starts where links from <b>${esc(cur.prevLab)}</b> enter`:'Starts at the heaviest link'}${cur.next?` and ends where links leave for <b>${esc(cur.nextLab)}</b>`:''}. ${kids.some(c=>c.v==null)?'Click a step (▸) to see the chain inside it.':'Double-click a variable for its details.'}`;
+  // layout: steps left to right, wrapping, plus the previous and next steps as dashed boxes
+  const items=[];if(cur.prev)items.push({k:'prev',lab:cur.prevLab});ch.forEach((x,j)=>items.push({k:'step',x,j}));if(cur.next)items.push({k:'next',lab:cur.nextLab});
+  const BW=180,BH=46,GX=56,GY=34,PER=Math.max(3,Math.floor(((($('#t-lay').clientWidth||1100)-20)+GX)/(BW+GX))),rows=Math.ceil(items.length/PER);
+  const P=items.map((it,i)=>{const r=Math.floor(i/PER),c=r%2?PER-1-(i%PER):i%PER;return {x:10+c*(BW+GX),y:22+r*(BH+GY)}});
+  const W_=10+Math.min(items.length,PER)*(BW+GX)-GX+10,H=22+rows*(BH+GY)-GY+12;
+  const gapCol=g=>{if(g==null)return'var(--card)';const t=Math.min(1,Math.abs(g)/3);return g<0?`rgba(217,45,32,${.12+.55*t})`:`rgba(15,157,88,${.12+.55*t})`};
+  let ed='';for(let i=1;i<items.length;i++){const a=P[i-1],b=P[i];let d;if(a.y===b.y){const x1=a.x<b.x?a.x+BW:a.x,x2=a.x<b.x?b.x:b.x+BW,y=a.y+BH/2;d=`M${x1},${y} L${x2},${y}`}else{const x=a.x+BW/2;d=`M${x},${a.y+BH} L${x},${b.y}`}
+   let w='';if(items[i-1].k==='step'&&items[i].k==='step'){const z=R.agg[items[i-1].x].get(items[i].x);w=z?`<title>link weight ${z.toPrecision(3)}</title>`:''}
+   ed+=`<path d="${d}" fill="none" stroke="var(--a)" stroke-width="2.4" marker-end="url(#rt)"${items[i-1].k!=='step'||items[i].k!=='step'?' stroke-dasharray="5 4"':''}>${w}</path>`}
+  let nd='';items.forEach((it,i)=>{const p=P[i];
+   if(it.k!=='step'){nd+=`<g><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--bg,#fff)" stroke="var(--mut)" stroke-dasharray="5 4"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">${it.k==='prev'?'from the step before':'on to the next step'}</text><text x="${p.x+8}" y="${p.y+34}" font-size="11.5" fill="var(--fg)">${esc(it.lab.length>24?it.lab.slice(0,23)+'…':it.lab)}</text></g>`;return}
+   const c=kids[it.x];
+   if(c.v!=null){const n=D.nodes[c.v],g=gapOf(n);nd+=`<g class="rv" data-n="${esc(n)}" style="cursor:pointer"><title>${esc(n)}${g!=null?`: gap ${pct(g)}`:': unchanged'}. Double-click for details.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="var(--bg,#fff)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="${gapCol(g)}" stroke="var(--fg)" stroke-opacity=".5"/><text x="${p.x+8}" y="${p.y+18}" font-size="10.5" fill="var(--mut)">step ${it.j+1}</text><text x="${p.x+8}" y="${p.y+35}" font-size="12" font-weight="600" fill="var(--fg)">${esc(n.length>23?n.slice(0,22)+'…':n)}${g!=null?` <tspan font-weight="400" font-size="11">${pct(g)}</tspan>`:''}</text></g>`}
+   else{const chn=c.m.filter(i=>ROW[D.nodes[i]]).length,more=!!(c.ch||c.m.length>1);nd+=`<g class="rg" data-j="${it.j}" style="cursor:pointer"><title>${esc(c.lab)}: ${c.m.length} variables (${chn} changed)${c.k?`, joined to the rest through ${c.k.length} key variable${c.k.length===1?'':'s'}`:''}. Click to see the chain inside it.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--card)" stroke="var(--a)" stroke-width="1.6"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">step ${it.j+1}${more?' ▸':''}</text><text x="${p.x+8}" y="${p.y+34}" font-size="12" font-weight="600" fill="var(--fg)">${esc(c.lab.length>17?c.lab.slice(0,16)+'…':c.lab)} · ${c.m.length.toLocaleString()}</text></g>`}});
+  const S=LVS[1];S.full=[0,0,W_,H];S.v=S.full.slice();
+  $('#lmap1').innerHTML=`<svg id="lsvg1" viewBox="${S.v.join(' ')}" style="width:${Math.min(($('#t-lay').clientWidth||1100),W_)}px;max-width:100%;height:${Math.round(Math.min(700,H*Math.min(1,(($('#t-lay').clientWidth||1100))/W_)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="rt" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--a)"/></marker></defs>${ed}${nd}</svg>`;
+  const sv=$('#lsvg1');panZoom(sv,S,'[data-lz1]','lz1');
+  // chain as text under the map
+  $('#mch1').innerHTML=`<div style="margin:4px 0">${ch.map(x=>{const c=kids[x];return c.v!=null?vlink(D.nodes[c.v]):`<b>${esc(c.lab)}</b>`}).join(' → ')}</div>`;
+  sv.addEventListener('click',e=>{const g=e.target.closest('.rg');if(!g)return;const j=+g.dataset.j,c=kids[ch[j]];if(!(c.ch||c.m.length>1))return;
+   const before=j>0?kids[ch[j-1]]:null,after=j<ch.length-1?kids[ch[j+1]]:null,lab=x=>x.v!=null?D.nodes[x.v]:x.lab;
+   RPATH.push({node:c,lab:`step ${j+1}: ${c.lab}`,prev:before?new Set(before.m):cur.prev,prevLab:before?lab(before):cur.prevLab,next:after?new Set(after.m):cur.next,nextLab:after?lab(after):cur.nextLab});drawAll()});
+  sv.addEventListener('dblclick',e=>{const g=e.target.closest('.rv');if(g)show(g.dataset.n)})}
+ $('#t-lay').addEventListener('click',e=>{const a=e.target.closest('[data-rp]');if(a){e.preventDefault();RPATH=RPATH.slice(0,+a.dataset.rp);drawAll()}});
  function drawAll(){const m=$('#mby').value;$('#mhint').innerHTML=HINTS[m]+` Colour is the gap at the end (green up, red down, grey unchanged). Double-click a box for its details. Scroll to zoom, drag to move.`;
-  $('#mcc').style.display=(m==='spc'||m==='flow')?'':'none';$('#mcl').style.display=m==='lay'?'':'none';$('#mcg').style.display=m==='grp'?'':'none';
-  if(m!=='grp')showSlots(3);
-  if(m==='lay'){[1,2,3].forEach(k=>$('#mch'+k).innerHTML='');drawMaps()}else if(m==='grp')drawGroups();else drawChains(m)}
+  $('#mcc').style.display=(m==='spc'||m==='flow')?'':'none';$('#mcl').style.display=m==='lay'?'':'none';$('#mcg').style.display=m==='grp'?'':'none';$('#mcr').style.display=m==='route'?'':'none';
+  if(m!=='grp'&&m!=='route')showSlots(3);
+  if(m==='lay'){[1,2,3].forEach(k=>$('#mch'+k).innerHTML='');drawMaps()}else if(m==='grp')drawGroups();else if(m==='route')drawRoute();else drawChains(m)}
  function drawMaps(){const a=meas(),cap=Math.max(20,+$('#mn').value||200),link=$('#mlink').checked;
   let t1=Math.max(2,+$('#t1').value||2),t2=Math.max(1,Math.min(t1-1,+$('#t2').value||1));
   const tier=(lo,hi)=>{const out=[];for(let i=0;i<N;i++){const v=val(i,a);if(v!=null&&v>=lo&&v<hi)out.push(i)}return out};
@@ -4988,7 +5072,8 @@ let KC={};
    {const fk=k>1?(FOC[k-1]!=null?k-1:(k===3&&FOC[1]!=null?1:null)):null;$('#mf'+k).innerHTML=fk!=null?`<span class="badge" style="cursor:pointer" data-cf="${fk}">narrowed to ${esc(D.nodes[FOC[fk]])} ✕</span>`:''}
    draw(k,ids,ghosts,a,total?`${total.toLocaleString()} variables${extra}${k>1&&!extra&&link?` linked to Map ${k-1}`:''}${total>cap?`; showing the ${cap} with the most layers and largest gaps`:''}.`:`No variables${extra} in this tier.`)}}
  $('#t-lay').addEventListener('click',e=>{const c=e.target.closest('[data-cf]');if(c){FOC[+c.dataset.cf]=null;if(c.dataset.cf==='1')FOC[2]=null;drawAll()}});
- ['#t1','#t2','#mn','#mlink','#c1','#c2','#c3','#mby','#gk','#gonly'].forEach(s=>$(s).addEventListener('input',e=>{FOC[1]=FOC[2]=null;GSEL[1]=GSEL[2]=null;if(e.target.id==='mby')GPATH=[];drawAll()}));
+ if(!Object.keys(D.esh||{}).length&&$('#rw'))$('#rw').value='spc';
+ ['#t1','#t2','#mn','#mlink','#c1','#c2','#c3','#mby','#gk','#gonly','#rw'].forEach(s=>$(s).addEventListener('input',e=>{FOC[1]=FOC[2]=null;GSEL[1]=GSEL[2]=null;if(e.target.id==='mby'){GPATH=[];RPATH=[]}if(e.target.id==='rw')RPATH=[];drawAll()}));
  if($('#lm'))$('#lm').addEventListener('input',()=>RC.clear());
  drawAll();
 })();
