@@ -62,6 +62,7 @@ Equations need **substituted coefficients** (numbers, not `C(1)`) to be decompos
 - **Key changes**: the complete list of series that differ. You can filter it, page through all of it, and download it as a CSV. Each series is tagged *changed directly* (an assumption or add-factor changed) or *via formula only* (same equation, same add-factor; it moved only because its inputs moved).
 - **Formula vs add-factor**: the formula/add-factor split for every equation. A time slider picks any quarter, or choose the whole window.
 - **By concept / By geography**: count only *directly changed* series as changed. Formula-only movers are shown in a separate column. Click a row to open its full list.
+- **Layers**: how many layers of variables each variable affects (longest chain of equations), inputs into an area, and a layer map. See below.
 - **Variable detail**: a stacked chart of each input's contribution to the gap in every quarter, a chart of the formula vs add-factor share over time, and a quarter slider for the exact numbers.
 - **Equations A vs B** (when they differ): every changed, added or dropped equation, with the changed parts highlighted.
 
@@ -103,6 +104,24 @@ The report uses the fast method; `--importance-method exact` switches it, and `-
 python scenario_explain.py importance --a base.csv --b s4.csv --eq model.txt --geo ICAN -o s4.html
 ```
 
+
+## How many layers a variable affects (Layers tab)
+
+**Layers** is the longest chain of equations from a variable downstream. 0 means no equation uses it. 3 means it feeds a variable, which feeds a variable, which feeds a variable. Lags count as links. A loop (GDP → income → consumption → GDP) counts as **one** layer, because inside a loop the longest chain never ends. This describes the model's structure, not the size of an effect.
+
+The tab has:
+- a histogram of how many variables reach each number of layers;
+- a table with each variable's layers and its full longest chain;
+- with an area (`--target` or `--area`), a second number per variable: the longest chain that **ends in the area**, e.g. `--area ICAN`;
+- **Inputs into the area**: the variables outside it that its equations use directly, and which area variables each one feeds. Everything else outside reaches the area only through these;
+- **Layer map**: columns are layers, with the variables that drive the most layers on the left. *At least 4* shows the model's backbone. *Exactly 4* shows those variables together with their longest chains. A box cap keeps it readable; scroll to zoom, drag to move.
+
+With `--target`, layers are counted on the full model before variables are dropped, so the overall numbers stay true.
+
+```bash
+python scenario_explain.py layers --a base.csv --b s4.csv --eq model.txt --area ICAN            # histogram, top chains, inputs into ICAN
+python scenario_explain.py layers --a base.csv --b s4.csv --eq model.txt --area ICAN --by-area  # rank by chains ending in ICAN
+```
 
 ## Equations that cannot be used
 
@@ -170,6 +189,7 @@ Without `--exog`, an exogenized variable shows up as *mostly add-factor*. The to
 | option | default | what |
 |---|---|---|
 | `--target SPEC` | | keep only these variables and everything that feeds them (directly or through any chain of equations, lags included). A geography code (`ICAN`), a wildcard (`"*_ICAN"`), names or a comma list; repeatable. Results for the kept variables are unchanged, just faster |
+| `--area SPEC` | `--target` | area for the Layers tab: chains that end in these variables (geography code, wildcard or names) |
 | `--tol` | 1e-6 | relative tolerance before a series counts as different |
 | `--geo-sep` | auto | character before the geography code: `.`, `_`, or auto-detect. A name ending counts as a geography only if 3+ concepts share it |
 | `--exog LIST` | | variables set exogenously by the modeller (file or comma list) |

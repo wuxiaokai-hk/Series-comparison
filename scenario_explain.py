@@ -3183,6 +3183,42 @@ def cmd_mask(args):
         print('No matching equation lines found.')
 
 
+def cmd_layers(M, args):
+    """Print how many layers of variables each variable affects (longest chain of equations)."""
+    L = args.layers
+    names, alab = args.layers_area
+    keep = [n for n in L if n in M.parents or n in M.children]
+    if args.match:
+        rx = re.compile(args.match, re.I)
+        keep = [n for n in keep if rx.search(n)]
+    k = 1 if (args.by_area and names) else 0
+    hist = Counter(L[n][k] for n in keep if L[n][k] is not None)
+    print('Layers%s: longest chain of equations from each variable downstream; a loop counts as one layer.'
+          % ((' into %s' % alab) if k else ' (overall)'))
+    print('  layers  variables')
+    for d in sorted(hist):
+        print('  %6d  %d' % (d, hist[d]))
+    if k:
+        print('  (cannot reach %s: %d)' % (alab, sum(1 for n in keep if L[n][1] is None)))
+    top = sorted((n for n in keep if L[n][k] is not None), key=lambda n: (-L[n][k], n))[:args.n]
+    print()
+    for n in top:
+        ch = layer_chain(L, n, area=bool(k))
+        print('%-28s %3d  %s%s' % (n, L[n][k], ' -> '.join(ch[1:8]), ' -> ...' if len(ch) > 8 else ''))
+    if names:
+        aset = set(names)
+        feeds = defaultdict(list)
+        for t in names:
+            for p in M.parents.get(t, ()):
+                if p not in aset:
+                    feeds[p].append(t)
+        print('\n%d variables outside %s feed it directly (%d of its variables use at least one):'
+              % (len(feeds), alab, len({t for ts in feeds.values() for t in ts})))
+        for p in sorted(feeds, key=lambda p: (-len(feeds[p]), p))[:args.n]:
+            ts = sorted(feeds[p])
+            print('  %-26s -> %3d  %s%s' % (p, len(ts), ', '.join(ts[:6]), ', ...' if len(ts) > 6 else ''))
+
+
 def cmd_check(M, args):
     write_check(M, args.out)
 
@@ -3291,6 +3327,32 @@ def _af_rows(M):
                      [_r(v, 5) for v in d['pgap']], [_r(v, 5) for v in d['pf']],
                      [_r(v, 5) for v in d['paf']] if d['paf'] else None])
     return rows
+
+
+def _layers_data(args, nodes):
+    """Layers per report node (aligned with D.nodes), plus the next step of each longest chain."""
+    L = getattr(args, 'layers', None)
+    if not L:
+        return None
+    names, label = getattr(args, 'layers_area', (None, None))
+    z = (0, None, None, None, 1)
+    nx, nxa = {}, {}
+    for n in nodes:
+        for k, dct in ((2, nx), (3, nxa)):
+            cur, guard = n, 0
+            while cur not in dct and guard < 80:
+                nxt = L.get(cur, z)[k]
+                if not nxt:
+                    break
+                dct[cur] = nxt
+                cur, guard = nxt, guard + 1
+    extra = sorted({v for v in list(nx.values()) + list(nxa.values())} - set(nodes))
+    return {'d': [L.get(n, z)[0] for n in nodes], 'da': [L.get(n, z)[1] for n in nodes],
+            'lp': [L.get(n, z)[4] for n in nodes], 'nx': nx, 'nxa': nxa,
+            'xd': {n: [L[n][0], L[n][1]] for n in extra if n in L},
+            'area': names, 'label': label,
+            'max': max((v[0] for v in L.values()), default=0),
+            'nall': len(L), 'pruned': bool(getattr(args, 'target', None))}
 
 
 def build_data(M, args, eqstats, serve=False):
@@ -3508,6 +3570,7 @@ def build_data(M, args, eqstats, serve=False):
                  'exog': sorted(M.exog)},
         'per': per, 'wsi': M.ws - es,
         'rows': rows, 'entry': entry, 'nodes': nodes, 'par': par,
+        'layers': _layers_data(args, nodes),
         'vals': vals, 'dec': dec, 'esh': esh, 'afsh': afsh, 'eshp': eshp, 'afshp': afshp, 'pg': pg,
         'reach': [reach.get(n, 0) for n in nodes], 'infl': infl,
         'summary': summ,
@@ -4159,6 +4222,7 @@ svg text{fill:var(--mut);font-size:11px}
 <section id="t-eqs" class="hide"></section>
 <section id="t-imp" class="hide"></section>
 <section id="t-inf" class="hide"></section>
+<section id="t-lay" class="hide"></section>
 <section id="t-stem" class="hide"></section>
 <section id="t-geo" class="hide"></section>
 <section id="t-path" class="hide"></section>
@@ -4190,8 +4254,8 @@ function desc(n){const r=ROW[n];return r?r[1]:(D.desc[n]||'')}
 document.addEventListener('click',e=>{const a=e.target.closest('[data-v]');if(a){e.preventDefault();show(a.dataset.v)}});
 
 // ---------- tabs
-const TABS=[['story','Summary'],['sum','Overview'],['top','Key changes'],['entry','Where B starts'],['afx','Formula vs add-factor'],['stem','By concept'],['geo','By geography'],['eqs','Equations A vs B'],['imp','Importance'],['inf','Influence'],['path','Impact X → Y']];
-$('#tabs').innerHTML=TABS.filter(t=>t[0]==='story'?D.summary:t[0]==='imp'?D.imp:t[0]==='eqs'?(D.eqdiff&&D.eqdiff.length):t[0]==='afx'?D.afrows.length:t[0]==='inf'?M.has_eqs:(t[0]!=='stem'&&t[0]!=='geo')||D[t[0]].length).map(t=>`<button data-t="${t[0]}">${t[1]}</button>`).join('');
+const TABS=[['story','Summary'],['sum','Overview'],['top','Key changes'],['entry','Where B starts'],['afx','Formula vs add-factor'],['stem','By concept'],['geo','By geography'],['eqs','Equations A vs B'],['imp','Importance'],['inf','Influence'],['lay','Layers'],['path','Impact X → Y']];
+$('#tabs').innerHTML=TABS.filter(t=>t[0]==='story'?D.summary:t[0]==='imp'?D.imp:t[0]==='eqs'?(D.eqdiff&&D.eqdiff.length):t[0]==='afx'?D.afrows.length:t[0]==='inf'?M.has_eqs:t[0]==='lay'?!!D.layers:(t[0]!=='stem'&&t[0]!=='geo')||D[t[0]].length).map(t=>`<button data-t="${t[0]}">${t[1]}</button>`).join('');
 function tab(t){document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));TABS.forEach(x=>$('#t-'+x[0]).classList.toggle('hide',x[0]!==t))}
 $('#tabs').addEventListener('click',e=>{if(e.target.dataset.t)tab(e.target.dataset.t)});
 $('#sub').innerHTML=`<b>A</b> = ${esc(M.a)} &nbsp; vs &nbsp; <b>B</b> = ${esc(M.b)} &nbsp;·&nbsp; window ${M.ws}–${M.we} &nbsp;·&nbsp; generated ${M.generated}`;
@@ -4374,6 +4438,88 @@ let KC={};
  $('#ivgo').onclick=lv;$('#iv').addEventListener('keydown',e=>{if(e.key==='Enter')lv()});
 })();
 
+// ---------- layers
+(function(){const Y=D.layers;if(!Y)return;
+ const N=D.nodes.length,AREA=Y.area?new Set(Y.area):null,AL=Y.label||'';
+ const val=(i,a)=>a?Y.da[i]:Y.d[i];
+ const chain=(n,a)=>{const nx=a?Y.nxa:Y.nx,out=[n];while(out.length<80){const v=nx[out[out.length-1]];if(!v||out.includes(v))break;out.push(v)}return out};
+ const lpOf=n=>{const i=NI[n];return i==null?1:Y.lp[i]};
+ const gapOf=n=>{const r=ROW[n];return r?r[7]:null};
+ const inA=n=>AREA&&AREA.has(n);
+ const chainHTML=(n,a)=>chain(n,a).map((v,k)=>`${k?'<span class="arrow">→</span>':''}<span class="step">${vlink(v)}${lpOf(v)>1?` <span class="badge" title="part of a loop of ${lpOf(v)} variables; the loop counts as one layer">loop ${lpOf(v)}</span>`:''}${inA(v)?' <span class="badge bE">area</span>':''}</span>`).join('');
+ let h=`<div class="hint"><b>Layers</b> = the longest chain of equations from a variable downstream: 0 = no equation uses it; 3 = it feeds a variable that feeds a variable that feeds a variable. A loop (e.g. GDP → income → consumption → GDP) counts as <b>one</b> layer, since inside a loop the chain never ends. Lags count as links. This is the model's structure, not the size of an effect.${Y.pruned?` Counted on the full model before <code>--target</code> dropped variables.`:''}</div>`;
+ h+=`<div class="ctl">${AREA?`<label>Measure <select id="lm"><option value="0">longest chain, anywhere</option><option value="1">longest chain ending in ${esc(AL)}</option></select></label>`:''} <input type="text" id="lq" placeholder="filter names, e.g. _ICAN or FGDP"> <label><input type="checkbox" id="lc"> changed only</label></div>
+ <div id="lh"></div><div id="lch"></div><div class="tw"><table><thead><tr><th>Variable</th><th>Type</th><th class="n">Layers</th>${AREA?`<th class="n">Into ${esc(AL)}</th>`:''}<th class="n">Used directly by</th><th class="n">Gap at end</th><th>Longest chain</th></tr></thead><tbody id="lt"></tbody></table></div><div id="lmore"></div>`;
+ if(AREA){h+=`<h2>Inputs into ${esc(AL)}</h2><div id="lin"></div>`}
+ h+=`<h2>Layer map</h2><div class="hint">Columns are layers: the variables that drive the most layers are on the left, those that feed nothing on the right. Arrows are equations. <b>At least</b> shows the model's backbone; <b>exactly</b> shows those variables with their longest chains. Colour = gap B − A at the end (green up, red down, grey unchanged). Scroll to zoom, drag to move, click a box for details.</div>
+ <div class="ctl"><label>Layers <select id="mmode"><option value="ge">at least</option><option value="eq">exactly</option></select></label> <input type="range" id="md" min="1" max="${Math.max(1,Y.max)}" value="${Math.min(4,Math.max(1,Y.max))}"> <b id="mdv"></b> <label>max boxes <input type="number" id="mn" value="250" min="20" max="3000" step="50" style="width:80px"></label> <span class="zb"><button class="btn" data-lz="in">+</button><button class="btn" data-lz="out">−</button><button class="btn" data-lz="reset">reset</button></span></div><div id="mnote" class="hint"></div><div id="lmap"></div>`;
+ $('#t-lay').innerHTML=h;
+ let LIM=300;
+ const meas=()=>AREA&&$('#lm')&&$('#lm').value==='1';
+ function hist(a){const c={};let none=0;for(let i=0;i<N;i++){const v=val(i,a);if(v==null){none++;continue}c[v]=(c[v]||0)+1}
+  const ks=Object.keys(c).map(Number).sort((x,y)=>x-y),mx=Math.max(1,...Object.values(c));
+  return `<div class="card"><b>How many variables reach each number of layers</b>${a?` (chains ending in ${esc(AL)})`:''}<table class="bars">${ks.map(k=>`<tr class="cl" data-lk="${k}"><td class="n">${k}</td><td style="width:70%"><div class="bar" style="width:${Math.max(1,100*c[k]/mx)}%;background:var(--a)"></div></td><td class="n">${c[k].toLocaleString()}</td></tr>`).join('')}</table>${a&&none?`<div class="hint">${none.toLocaleString()} variables cannot reach ${esc(AL)}.</div>`:''}<div class="hint">Click a row to list those variables.</div></div>`}
+ let only=null;
+ function table(){const a=meas(),q=$('#lq').value.trim().toUpperCase(),ch=$('#lc').checked;
+  let ids=[];for(let i=0;i<N;i++){const v=val(i,a);if(v==null)continue;const n=D.nodes[i];if(q&&!n.includes(q))continue;if(ch&&!ROW[n])continue;if(only!=null&&v!==only)continue;ids.push(i)}
+  ids.sort((x,y)=>val(y,a)-val(x,a)||CH[y].length-CH[x].length||(D.nodes[x]<D.nodes[y]?-1:1));
+  $('#lt').innerHTML=ids.slice(0,LIM).map(i=>{const n=D.nodes[i],c=chain(n,a),g=gapOf(n),r=ROW[n];return `<tr class="cl" data-lr="${esc(n)}"><td>${vlink(n)}</td><td>${badge(r?r[9]:(M.has_eqs&&D.par[i].length?'E':'X'),n)}</td><td class="n"><b>${Y.d[i]}</b></td>${AREA?`<td class="n">${Y.da[i]==null?'–':Y.da[i]}</td>`:''}<td class="n">${CH[i].length}</td><td class="n ${cls(g)}">${g==null?'–':pct(g)}</td><td class="small">${c.slice(1,5).map(esc).join(' → ')}${c.length>5?' → …':''}</td></tr>`}).join('');
+  $('#lmore').innerHTML=`<div class="hint">${only!=null?`Only variables with ${only} layers. <a href="#" id="lall">show all</a>. `:''}Showing ${Math.min(LIM,ids.length).toLocaleString()} of ${ids.length.toLocaleString()}${ids.length>LIM?` <button class="btn" id="lmb">show 500 more</button>`:''}. Click a row for its full chain.</div>`;
+  const b=$('#lmb');if(b)b.onclick=()=>{LIM+=500;table()};const al=$('#lall');if(al)al.onclick=e=>{e.preventDefault();only=null;table()}}
+ function refresh(){$('#lh').innerHTML=hist(meas());$('#lch').innerHTML='';table()}
+ $('#t-lay').addEventListener('click',e=>{if(e.target.closest('a'))return;const r=e.target.closest('[data-lr]');if(r){const n=r.dataset.lr,a=meas(),i=NI[n];
+   $('#lch').innerHTML=`<div class="card"><b>${esc(n)}</b>: ${val(i,a)} layers${a?` into ${esc(AL)}`:''}. Longest chain:<div style="margin-top:6px">${chainHTML(n,a)}</div>${!a&&AREA&&Y.da[i]!=null&&Y.da[i]!==Y.d[i]?`<div class="hint" style="margin-top:6px">Longest chain ending in ${esc(AL)} (${Y.da[i]} layers): ${chainHTML(n,true)}</div>`:''}</div>`;$('#lch').scrollIntoView({block:'nearest'});return}
+  const k=e.target.closest('[data-lk]');if(k){only=+k.dataset.lk;LIM=300;table()}});
+ ['#lq','#lc'].forEach(s=>$(s).addEventListener('input',()=>{LIM=300;table()}));if($('#lm'))$('#lm').addEventListener('input',()=>{only=null;LIM=300;refresh();drawMap()});
+ refresh();
+ // inputs into the area: variables outside it that its equations use directly
+ if(AREA){const feeds={};Y.area.forEach(t=>{const i=NI[t];if(i==null)return;D.par[i].forEach(p=>{const pn=D.nodes[p];if(!AREA.has(pn))(feeds[pn]=feeds[pn]||[]).push(t)})});
+  const ks=Object.keys(feeds).sort((x,y)=>feeds[y].length-feeds[x].length||(x<y?-1:1)),fed=new Set(Object.values(feeds).flat());
+  $('#lin').innerHTML=`<div class="hint"><b>${ks.length.toLocaleString()}</b> variables outside ${esc(AL)} are used directly in its equations; ${fed.size.toLocaleString()} of its ${Y.area.length.toLocaleString()} variables use at least one. Everything else outside reaches ${esc(AL)} only through these.</div>
+  <div class="tw"><table><thead><tr><th>Input</th><th>Type</th><th class="n">Gap at end</th><th class="n">${esc(AL)} variables using it</th><th>Which</th></tr></thead><tbody>${ks.map(p=>{const r=ROW[p],g=gapOf(p),ts=feeds[p].sort();return `<tr><td>${vlink(p)}</td><td>${badge(r?r[9]:(D.par[NI[p]].length?'E':'X'),p)}</td><td class="n ${cls(g)}">${g==null?'unchanged':pct(g)}</td><td class="n">${ts.length}</td><td class="small">${ts.slice(0,12).map(vlink).join(', ')}${ts.length>12?` … and ${ts.length-12} more`:''}</td></tr>`}).join('')}</tbody></table></div>`}
+ // layer map
+ const LV={v:null,full:null};
+ function drawMap(){const a=meas(),d=+$('#md').value,mode=$('#mmode').value,cap=Math.max(20,+$('#mn').value||250);$('#mdv').textContent=d;
+  let pick=[];for(let i=0;i<N;i++){const v=val(i,a);if(v==null)continue;if(mode==='ge'?v>=d:v===d)pick.push(i)}
+  const total=pick.length;pick.sort((x,y)=>val(y,a)-val(x,a)||Math.abs(gapOf(D.nodes[y])||0)-Math.abs(gapOf(D.nodes[x])||0)||CH[y].length-CH[x].length);pick=pick.slice(0,cap);
+  const sel=new Set(pick);
+  if(mode==='eq'){pick.slice().forEach(i=>chain(D.nodes[i],a).forEach(n=>{const j=NI[n];if(j!=null&&!sel.has(j)&&sel.size<cap*3){sel.add(j)}}))}
+  const ids=[...sel];
+  $('#mnote').textContent=total?`${total.toLocaleString()} variables with ${mode==='ge'?'at least':'exactly'} ${d} layers${total>cap?`; showing the ${cap} with the most layers and largest gaps`:''}${mode==='eq'?`, plus the variables on their longest chains`:''} (${ids.length} boxes).`:`No variable has ${mode==='ge'?'at least':'exactly'} ${d} layers.`;
+  if(!ids.length){$('#lmap').innerHTML='';return}
+  const lay=i=>val(i,a),cols={};ids.forEach(i=>(cols[lay(i)]=cols[lay(i)]||[]).push(i));
+  const ks=Object.keys(cols).map(Number).sort((x,y)=>y-x),ci={};ks.forEach((k,j)=>ci[k]=j);
+  const pos={};ks.forEach(k=>cols[k].forEach((i,r)=>pos[i]=r));
+  const inS=i=>D.par[i].filter(p=>sel.has(p));
+  for(let sweep=0;sweep<3;sweep++)ks.forEach((k,j)=>{if(!j)return;cols[k].sort((x,y)=>{const m=z=>{const ps=inS(z);return ps.length?ps.reduce((s,p)=>s+pos[p],0)/ps.length:1e9};return m(x)-m(y)});cols[k].forEach((i,r)=>pos[i]=r)});
+  const BW=150,BH=26,GX=90,SX=14,GY=8,R=Math.max(12,Math.min(40,Math.ceil(Math.sqrt(ids.length)*1.6)));
+  const nsub={},x0={};let xc=10;ks.forEach(k=>{nsub[k]=Math.max(1,Math.ceil(cols[k].length/R));x0[k]=xc;xc+=nsub[k]*(BW+SX)-SX+GX});
+  const rows=k=>Math.ceil(cols[k].length/nsub[k]),mr=Math.max(...ks.map(rows)),W=xc-GX+20,H=mr*(BH+GY)+20;
+  const P={};ks.forEach(k=>{const c=cols[k],rk=rows(k),off=(H-rk*(BH+GY))/2+6;c.forEach((i,r)=>P[i]={x:x0[k]+Math.floor(r/rk)*(BW+SX),y:off+(r%rk)*(BH+GY)})});
+  const col=g=>{if(g==null)return'var(--card)';const t=Math.min(1,Math.abs(g)/3);return g<0?`rgba(217,45,32,${.12+.55*t})`:`rgba(15,157,88,${.12+.55*t})`};
+  let ed='';ids.forEach(v=>inS(v).forEach(u=>{const A=P[u],B=P[v];if(!A||!B)return;let dpath;
+   if(A.x<B.x){const x1=A.x+BW,y1=A.y+BH/2,x2=B.x,y2=B.y+BH/2,mx=(x1+x2)/2;dpath=`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
+   else{const x1=A.x+BW,y1=A.y+BH/2,x2=B.x+BW,y2=B.y+BH/2,bx=Math.max(x1,x2)+30;dpath=`M${x1},${y1} C${bx},${y1} ${bx},${y2} ${x2},${y2}`}
+   ed+=`<path d="${dpath}" fill="none" stroke="var(--mut)" stroke-opacity=".35" stroke-width="1" marker-end="url(#la)" data-e="${u},${v}"/>`}));
+  let nd='';ids.forEach(i=>{const n=D.nodes[i],p=P[i],g=gapOf(n);nd+=`<g class="ln" data-v="${esc(n)}" data-i="${i}" style="cursor:pointer"><title>${esc(n)}: ${Y.d[i]} layers${AREA&&Y.da[i]!=null?`, ${Y.da[i]} into ${AL}`:''}${g!=null?`, gap ${pct(g)}`:', unchanged'}${Y.lp[i]>1?`, in a loop of ${Y.lp[i]}`:''}</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${col(g)}" stroke="${inA(n)?'var(--a)':'var(--line)'}" stroke-width="${inA(n)?2:1}"/><text x="${p.x+6}" y="${p.y+17}" font-size="11" fill="var(--fg)">${esc(n.length>22?n.slice(0,21)+'…':n)}</text></g>`});
+  const hd=ks.map(k=>`<text x="${x0[k]}" y="12" font-size="11" fill="var(--mut)">${k} layer${k===1?'':'s'} (${cols[k].length})</text>`).join('');
+  LV.full=[0,-6,W,H+20];LV.v=LV.full.slice();
+  $('#lmap').innerHTML=`<svg id="lsvg" viewBox="${LV.v.join(' ')}" style="width:100%;height:${Math.round(Math.min(720,Math.max(260,($('#t-lay').clientWidth||1100)*(H+20)/W)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="la" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--mut)"/></marker></defs>${hd}${ed}${nd}</svg>`;
+  panZoom($('#lsvg'),LV,'[data-lz]');
+  const sv=$('#lsvg');sv.addEventListener('mouseover',e=>{const g=e.target.closest('.ln');if(!g)return;const i=g.dataset.i;sv.querySelectorAll('path[data-e]').forEach(pth=>{const [u,v]=pth.dataset.e.split(',');const on=u===i||v===i;pth.setAttribute('stroke',on?'var(--a)':'var(--mut)');pth.setAttribute('stroke-opacity',on?'.9':'.35');pth.setAttribute('stroke-width',on?'2':'1')})})}
+ ['#md','#mmode','#mn'].forEach(s=>$(s).addEventListener('input',drawMap));
+ drawMap();
+})();
+function panZoom(sv,S,btnSel){if(!sv)return;const set=()=>sv.setAttribute('viewBox',S.v.join(' '));
+ const zoomAt=(f,cx,cy)=>{const [x,y,w,h]=S.v,nw=Math.min(S.full[2]*2,Math.max(S.full[2]/40,w*f)),k=nw/w;S.v=[cx-(cx-x)*k,cy-(cy-y)*k,nw,h*k];set()};
+ const toSvg=(ex,ey)=>{const r=sv.getBoundingClientRect(),[x,y,w,h]=S.v,sc=Math.max(w/r.width,h/r.height),ox=(r.width*sc-w)/2,oy=(r.height*sc-h)/2;return[x-ox+(ex-r.left)*sc,y-oy+(ey-r.top)*sc,sc]};
+ sv.addEventListener('wheel',e=>{e.preventDefault();const [cx,cy]=toSvg(e.clientX,e.clientY);zoomAt(e.deltaY>0?1.15:1/1.15,cx,cy)},{passive:false});
+ let drag=null,moved=false;
+ sv.addEventListener('pointerdown',e=>{drag=[e.clientX,e.clientY,S.v.slice()];moved=false});
+ window.addEventListener('pointermove',e=>{if(!drag)return;const sc=toSvg(0,0)[2],dx=(e.clientX-drag[0])*sc,dy=(e.clientY-drag[1])*sc;if(Math.abs(dx)+Math.abs(dy)>2)moved=true;S.v=[drag[2][0]-dx,drag[2][1]-dy,drag[2][2],drag[2][3]];set()});
+ window.addEventListener('pointerup',()=>{drag=null});
+ sv.addEventListener('click',e=>{if(moved){e.stopPropagation();e.preventDefault();moved=false}},true);
+ document.querySelectorAll(btnSel).forEach(b=>b.onclick=()=>{const [x,y,w,h]=S.v,z=b.dataset.lz;if(z==='reset'){S.v=S.full.slice();set()}else zoomAt(z==='in'?1/1.3:1.3,x+w/2,y+h/2)})}
 // ---------- influence
 function infSummary(r,what){return `<div class="kpis"><div class="kpi"><span class="mut small">linked through equations</span><b>${r.reach.toLocaleString()}</b></div><div class="kpi"><span class="mut small">actually move (≥${r.thr}%)</span><b>${r.moved.toLocaleString()}</b></div><div class="kpi"><span class="mut small">move ≥ 1%</span><b>${r.ge1.toLocaleString()}</b></div><div class="kpi"><span class="mut small">0.1–1%</span><b>${r.b01.toLocaleString()}</b></div><div class="kpi"><span class="mut small">${r.thr}–0.1%</span><b>${r.b001.toLocaleString()}</b></div></div>
  <div class="hint">${what}. ${r.resolved.toLocaleString()} equations re-solved${r.blocked?`; ${r.blocked} linked variables have no evaluable equation and were held fixed`:''}. Largest effect over ${esc(M.ws)}–${esc(M.we)}, as % of the scenario-A level:</div>
@@ -4651,6 +4797,25 @@ def build_model(args):
         if not src_a:
             eqs = {}
     meta = load_meta(args.meta) if args.meta else None
+    exog_names = set(load_exog(args.exog))
+    lp = defaultdict(set)
+    for E in (eqs, eqs_b or {}):
+        for n, e in E.items():
+            if n not in exog_names:
+                lp[n].update(d for d in e.drivers if d != n)
+    allnames = set(A.series) | set(B.series) | set(eqs) | set(eqs_b or {})
+    area, area_label = None, None
+    if getattr(args, 'area', None):
+        area, area_label = _match_spec(allnames, args.area, '--area', say), ', '.join(args.area)
+    elif getattr(args, 'target', None):
+        area, area_label = _match_spec(allnames, args.target, '--target', lambda m: None), ', '.join(args.target)
+    t1 = time.time()
+    args.layers = compute_layers(lp, area)
+    args.layers_area = (sorted(area) if area else None, area_label)
+    say('Layers: longest chain %d%s, %d variables in %.1fs'
+        % (max((v[0] for v in args.layers.values()), default=0),
+           (', into %s %s' % (area_label, max((v[1] for v in args.layers.values() if v[1] is not None), default=0)))
+           if area else '', len(args.layers), time.time() - t1))
     if getattr(args, 'target', None):
         args.target_set = _apply_target(args.target, A, B, eqs, eqs_b, addl, load_exog(args.exog),
                                         args.af_suffix, say)
@@ -4662,15 +4827,12 @@ def build_model(args):
     return M, eqstats, fails
 
 
-def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say):
-    """--target: keep only the target variables and every series that feeds them through the equations
-    (directly or via any chain, lags included), plus their add-factor series. Everything else is dropped
-    before the model is built, so all results are unchanged for the kept variables, only faster.
-    A spec is an exact name, a wildcard (*_ICAN, FGDP*), or a bare geography code (ICAN = *.ICAN and *_ICAN)."""
+def _match_spec(names, spec_list, opt, say):
+    """Names matching --target / --area specs: exact names, wildcards (*_ICAN), or a bare geography code
+    (ICAN = *.ICAN and *_ICAN); comma lists allowed."""
     import fnmatch
-    names = set(A.series) | set(B.series) | set(eqs) | set(eqs_b or {})
-    targets = set()
-    for spec in spec_list:
+    out = set()
+    for spec in spec_list or ():
         for f in re.split(r'[,;\s]+', spec):
             f = f.strip().strip('"\'').upper()
             if not f:
@@ -4679,12 +4841,74 @@ def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say):
                 hit = {n for n in names if fnmatch.fnmatchcase(n, f)}
             elif f in names:
                 hit = {f}
-            else:                                   # geography code
+            else:
                 code = f.lstrip('._')
                 hit = {n for n in names if n.endswith('.' + code) or n.endswith('_' + code)}
             if not hit:
-                say('--target %s: nothing matches' % f)
-            targets |= hit
+                say('%s %s: nothing matches' % (opt, f))
+            out |= hit
+    return out
+
+
+def compute_layers(parents, area=None):
+    """Longest chain of equations from each variable downstream ("layers it affects").
+    parents: variable -> variables its equation uses (any lag). A loop counts as one layer, since inside
+    a loop the longest chain is endless. Returns per variable:
+      d    longest chain to any variable (0 = feeds nothing)
+      da   longest chain that ends in `area` (None = cannot reach the area; 0 = in the area, feeds no other)
+      nx / nxa   next variable on that chain;  lp  size of the loop it sits in (1 = no loop)."""
+    nodes = set(parents)
+    for ps in parents.values():
+        nodes.update(ps)
+    nodes = sorted(nodes)
+    comps = _scc_order(nodes, parents)          # upstream components first
+    comp = {}
+    for ci, c in enumerate(comps):
+        for n in c:
+            comp[n] = ci
+    out_edges = defaultdict(list)               # component -> [(u, v)] edges leaving it
+    for v, ps in parents.items():
+        cv = comp[v]
+        for u in ps:
+            if comp[u] != cv:
+                out_edges[comp[u]].append((u, v))
+    area = set(area or ())
+    nc = len(comps)
+    d, da, nx, nxa = [0] * nc, [None] * nc, [None] * nc, [None] * nc
+    for ci in range(nc - 1, -1, -1):            # downstream components first
+        if any(n in area for n in comps[ci]):
+            da[ci] = 0
+        for u, v in out_edges.get(ci, ()):
+            cv = comp[v]
+            if d[cv] + 1 > d[ci]:
+                d[ci], nx[ci] = d[cv] + 1, (u, v)
+            if da[cv] is not None and (da[ci] is None or da[cv] + 1 > da[ci]):
+                da[ci], nxa[ci] = da[cv] + 1, (u, v)
+    res = {}
+    for n in nodes:
+        ci = comp[n]
+        res[n] = (d[ci], da[ci], nx[ci][1] if nx[ci] else None, nxa[ci][1] if nxa[ci] else None, len(comps[ci]))
+    return res
+
+
+def layer_chain(L, n, area=False, limit=60):
+    """The longest chain from n as a list of names (loops shown by one member each)."""
+    out, k = [n], 3 if area else 2
+    while len(out) < limit:
+        nxt = L.get(out[-1], (0, None, None, None, 1))[k]
+        if not nxt or nxt in out:
+            break
+        out.append(nxt)
+    return out
+
+
+def _apply_target(spec_list, A, B, eqs, eqs_b, addl, exog, af_suffix, say):
+    """--target: keep only the target variables and every series that feeds them through the equations
+    (directly or via any chain, lags included), plus their add-factor series. Everything else is dropped
+    before the model is built, so all results are unchanged for the kept variables, only faster.
+    A spec is an exact name, a wildcard (*_ICAN, FGDP*), or a bare geography code (ICAN = *.ICAN and *_ICAN)."""
+    names = set(A.series) | set(B.series) | set(eqs) | set(eqs_b or {})
+    targets = _match_spec(names, spec_list, '--target', say)
     if not targets:
         raise SystemExit('--target matched no series')
     exog = set(exog or ())
@@ -4774,6 +4998,9 @@ def main(argv=None):
         sp.add_argument('--target', action='append', metavar='SPEC',
                         help='keep only these variables and everything that feeds them: a geography code (ICAN), '
                              'a wildcard ("*_ICAN"), names or a comma list; repeatable')
+        sp.add_argument('--area', action='append', metavar='SPEC',
+                        help='area for the Layers tab: longest chains that end in these variables (geography code, '
+                             'wildcard or names; default: --target)')
         sp.add_argument('--tol', type=float, default=1e-6, help='relative tolerance for "differs" (default 1e-6)')
         sp.add_argument('--geo-sep', default='auto',
                         help='separator before the geography code: "." (FGDP.ICAN), "_" (FGDP_ICAN) or auto (default)')
@@ -4888,6 +5115,12 @@ def main(argv=None):
     common(sp)
     sp.add_argument('-o', '--out', default='not_evaluable.csv')
 
+    sp = sub.add_parser('layers', help='how many layers of variables each variable affects (longest chain)')
+    common(sp)
+    sp.add_argument('-n', type=int, default=25)
+    sp.add_argument('--match', help='only variables matching this regex')
+    sp.add_argument('--by-area', action='store_true', help='rank by the longest chain into --area / --target')
+
     sp = sub.add_parser('mask', help='print equations with error-term brackets with names/numbers hidden (safe to share)')
     sp.add_argument('--eq', '--eq-a', '--eq-b', action='append', required=True, help='equation file(s) or folder')
     sp.add_argument('--failed', action='store_true', help='only lines that cannot be used')
@@ -4917,6 +5150,8 @@ def main(argv=None):
         cmd_path(M, args)
     elif args.cmd == 'report':
         build_report(M, args, eqstats)
+    elif args.cmd == 'layers':
+        cmd_layers(M, args)
     elif args.cmd == 'importance':
         args.eqstats = eqstats
         cmd_importance(M, args)
