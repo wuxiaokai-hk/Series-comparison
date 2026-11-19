@@ -3236,7 +3236,8 @@ def cmd_groups(M, args):
     idx = {n: i for i, n in enumerate(nodes)}
     par = [[idx[p] for p in M.parents.get(n, ()) if p in idx] for n in nodes]
     t = time.time()
-    G = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None), boxes=args.map_boxes)
+    G = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None), boxes=args.map_boxes,
+                       by_geo=getattr(args, 'map_geo', False))
     print('Groups in %.1fs, at most %d boxes per view. Key variables = the fewest variables that every link '
           'between the group and the rest of the model passes through.' % (time.time() - t, G['boxes']))
     shown = [0]
@@ -3479,7 +3480,7 @@ def _min_cover(cut):
     return sorted(set(left) - zl) + sorted(zr)
 
 
-def compute_groups(nodes, par, geo=None, boxes=40):
+def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False):
     """Split the equation graph into a tree of groups, so that no view shows more than `boxes` boxes.
     Each split uses Louvain community detection (dense inside, loose links to the rest), with its
     resolution tuned to give 2 .. ~2/3 boxes parts; too many parts are grouped again; a set with no
@@ -3510,6 +3511,14 @@ def compute_groups(nodes, par, geo=None, boxes=40):
             g, k = c.most_common(1)[0]
             if g and k >= 0.6 * len(mem) and g != plab:         # inside one region, name by a variable instead
                 return g
+            top3, cov = [], 0                                  # mostly two or three regions: name them
+            for g2, k2 in c.most_common(3):
+                if not g2 or g2 == plab:
+                    break
+                top3.append(g2)
+                cov += k2
+                if cov >= 0.8 * len(mem):
+                    return ' + '.join(top3)
         top = max(mem, key=lambda i: (len(nbr[i]), nodes[i]))
         return 'around ' + nodes[top]
 
@@ -3593,7 +3602,7 @@ def compute_groups(nodes, par, geo=None, boxes=40):
         return out
 
     linked = [i for i in range(n) if nbr[i]]                   # variables with no links at all are left out
-    if geo and len(linked) > boxes:                            # geographies found in the names: split by them first
+    if by_geo and geo and len(linked) > boxes:                 # --map-geo: split by geography first
         gl = {i: (geo(nodes[i]) or '') for i in linked}
         byg = defaultdict(list)
         for i in linked:
@@ -3633,11 +3642,11 @@ def compute_groups(nodes, par, geo=None, boxes=40):
     return {'tree': tree, 'boxes': boxes}
 
 
-def _groups_payload(nodes, M, boxes=40):
+def _groups_payload(nodes, M, boxes=40, by_geo=False):
     idx = {n: i for i, n in enumerate(nodes)}
     par = [[idx[p] for p in M.parents.get(n, ()) if p in idx] for n in nodes]
     t = time.time()
-    g = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None), boxes=boxes)
+    g = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None), boxes=boxes, by_geo=by_geo)
 
     def depth(ts):
         return 1 + max((depth(x['ch']) for x in ts if x.get('ch')), default=0) if ts else 0
@@ -3680,7 +3689,7 @@ def _layers_data(args, nodes, M=None):
             'lp': [L.get(n, z)[4] for n in nodes], 'nx': nx, 'nxa': nxa,
             'xd': {n: [L[n][0], L[n][1]] for n in extra if n in L},
             'cid': _loop_ids(nodes, M) if M is not None else None,
-            'grp': _groups_payload(nodes, M, getattr(args, 'map_boxes', 40)) if M is not None else None,
+            'grp': _groups_payload(nodes, M, getattr(args, 'map_boxes', 40), getattr(args, 'map_geo', False)) if M is not None else None,
             'area': names, 'label': label, 'out': getattr(args, 'area_out', None),
             'max': max((v[0] for v in L.values()), default=0),
             'nall': len(L), 'pruned': bool(getattr(args, 'target', None))}
@@ -5728,6 +5737,8 @@ def main(argv=None):
         sp.add_argument('--target-exog', action='store_true',
                         help='with --target: treat every variable outside the target as exogenous (taken from '
                              'each scenario), so only the target\'s own equations are solved')
+        sp.add_argument('--map-geo', action='store_true',
+                        help='group maps: split by geography first (default: by equation links at every level)')
         sp.add_argument('--map-boxes', type=int, default=40,
                         help='most boxes in one view of the group maps; groups are split into more levels to fit')
         sp.add_argument('--area', action='append', metavar='SPEC',
