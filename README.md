@@ -105,6 +105,28 @@ python scenario_explain.py importance --a base.csv --b s4.csv --eq model.txt --g
 ```
 
 
+## What drives a result (Layers tab, first map)
+
+Pick a result variable (by default the most connected changed variable, or one in `--area`). The map shows three things:
+
+- **Initial forces**, in the left column: variables with no equation, variables the modeller set, and judgement add-factors. Each one shows the share of the result's gap it explains.
+- **Channels**, in the middle: the variables the gap passes through, each with the share it carries.
+- **The result**, on the right.
+
+Each force is joined to the result by its **widest route**, the route whose weakest link carries the most. Links under a threshold (5% by default) are hidden, so a 20,000-series model still gives a map of about 20 boxes. Above the map, a few sentences give the initial forces with their shares, the main route and the biggest channels. Below it are two tables: every initial force with its route, and the channels. Click any box to explain that variable instead.
+
+**How the shares are computed.** Each equation splits its variable's gap into its inputs: switch one input from A to B and keep the rest at A, the same split as "Where the gap comes from". Over the whole window the share of input k in y's gap is
+
+  w_k(y) = Σ_t C_k,t · g_t / Σ_t g_t²
+
+Chaining these backward from the result Y gives the share that passes through each variable u:
+
+  τ(Y) = 1 + Σ_y w_Y(y) τ(y),  τ(u) = Σ_y w_u(y) τ(y)
+
+For an initial force s, τ(s) is the share of Y's gap it explains, the same number as on the Importance tab. A link u → y carries w_u(y) · τ(y). Loops are solved by iterating, so inside a loop a variable can carry more than 100%, because the effect goes round more than once.
+
+The result is exact for a linear model and approximate otherwise. You can also choose the shares at the end of the window or in a single period.
+
 ## How many layers a variable affects (Layers tab)
 
 **Layers** is the longest chain of equations from a variable downstream. 0 means no equation uses it. 3 means it feeds a variable, which feeds a variable, which feeds a variable. Lags count as links. A loop (GDP → income → consumption → GDP) counts as **one** layer, because inside a loop the longest chain never ends. This describes the model's structure, not the size of an effect.
