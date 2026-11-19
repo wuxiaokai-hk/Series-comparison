@@ -225,3 +225,7 @@ python scenario_explain.py report --a demo/base.csv --b demo/stress.csv \
 ```
 
 `demo_report.html` is the result.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Free to use, change and share. Data downloaded from public sources stay under their providers' terms. Independent open-source project, not affiliated with or endorsed by any employer, regulator or data vendor.
