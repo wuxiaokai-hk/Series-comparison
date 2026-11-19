@@ -5099,7 +5099,8 @@ let KC={};
    tr.insertAdjacentHTML('afterend',h)}
   function close(id){const tr=tb.querySelector(`tr[data-id="${id}"]`);if(!tr)return;delete tr.dataset.open;tr.querySelector('.tw_').textContent='▸';
    const kill=[id];for(let x=0;x<kill.length;x++)tb.querySelectorAll(`tr[data-p="${kill[x]}"]`).forEach(r=>{if(r.dataset.id)kill.push(r.dataset.id);r.remove()})}
-  function reset(){tb.innerHTML=(root.ch.length===1&&!root.ch[0].ch?[root]:root.ch).map(g=>rowG(g,0,'root')).join('')}
+  if(root.ch.length===1&&!root.ch[0].ch)root.ch[0]=Object.assign({},root.ch[0],{lab:'Whole model'});
+  function reset(){tb.innerHTML=root.ch.map(g=>rowG(g,0,'root')).join('')}
   reset();
   tb.addEventListener('click',e=>{const t=e.target.closest('.tw_');if(!t)return;const tr=t.closest('tr');tr.dataset.open?close(tr.dataset.id):open(tr.dataset.id)});
   $('#tx0').onclick=reset;
