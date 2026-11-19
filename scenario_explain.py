@@ -277,6 +277,13 @@ def read_xlsx(path, sheet=None):
     return grid
 
 
+def xlsx_sheets(path):
+    """Names of the worksheets of an .xlsx file, in order."""
+    with zipfile.ZipFile(path) as z:
+        wb = ET.fromstring(z.read('xl/workbook.xml'))
+        return [s.get('name') for s in wb.iter(_NS + 'sheet')]
+
+
 def read_grid(path, sheet=None):
     """Return (rows, is_xlsx)."""
     ext = os.path.splitext(path)[1].lower()
@@ -319,6 +326,7 @@ class Scenario:
         self.keys = {}          # sortkey -> label
         self.notes = []
         self.dups = 0
+        self.keep_empty = False
 
     def put(self, name, bid, arr, desc=''):
         name = name.strip().upper()
@@ -424,7 +432,7 @@ def _ingest_rows(sc, grid, i, cols, path):
             continue
         L = len(r)
         arr = array('d', (_num(r[j]) if j < L else NAN for j in jlist))
-        if all(_isnan(v) for v in arr):
+        if all(_isnan(v) for v in arr) and not sc.keep_empty:
             continue
         desc = _clean(r[desccol]) if desccol is not None and desccol < L else ''
         sc.put(name, bid, arr, desc)
@@ -467,7 +475,7 @@ def _ingest_cols(sc, grid, c, idx, path):
         if not name:
             continue
         arr = array('d', (_num(r[j]) if j < len(r) else NAN for r in rows))
-        if all(_isnan(v) for v in arr):
+        if all(_isnan(v) for v in arr) and not sc.keep_empty:
             continue
         sc.put(name, bid, arr, _clean(descs[j]) if j < len(descs) else '')
         n += 1
@@ -494,11 +502,29 @@ def _ingest_long(sc, grid, h, scol, dcol, vcol, serial, path):
     sc.notes.append('%s: long format (series, date, value), %d series' % (os.path.basename(path), len(data)))
 
 
-def load_scenario(paths, label, sheet=None):
+def load_scenario(paths, label, sheet=None, keep_empty=False):
+    """Read scenario data. For an .xlsx with no sheet named, every sheet with a row or column of dates is
+    read; sheets without dates (notes, metadata) are skipped and listed in sc.notes."""
     sc = Scenario(label)
+    sc.keep_empty = keep_empty
     for p in paths:
-        grid, serial = read_grid(p, sheet)
-        _ingest(sc, grid, serial, p)
+        if sheet is None and os.path.splitext(p)[1].lower() in ('.xlsx', '.xlsm'):
+            names = xlsx_sheets(p)
+            read = 0
+            for k, nm in enumerate(names):
+                grid, serial = read_xlsx(p, k + 1), True
+                if not any(any(_clean(c) for c in r) for r in grid):
+                    continue
+                try:
+                    _ingest(sc, grid, serial, '%s [%s]' % (p, nm))
+                    read += 1
+                except (SystemExit, ValueError) as e:
+                    sc.notes.append('%s: sheet %r skipped (%s)' % (os.path.basename(p), nm, str(e).split(': ', 1)[-1][:80]))
+            if not read:
+                raise SystemExit('%s: no sheet with a row or column of dates' % p)
+        else:
+            grid, serial = read_grid(p, sheet)
+            _ingest(sc, grid, serial, p)
     if sc.dups:
         sc.notes.append('%d duplicate series names (last one kept)' % sc.dups)
     return sc
