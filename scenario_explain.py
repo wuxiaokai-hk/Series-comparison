@@ -5076,6 +5076,48 @@ let KC={};
  ['#t1','#t2','#mn','#mlink','#c1','#c2','#c3','#mby','#gk','#gonly','#rw'].forEach(s=>$(s).addEventListener('input',e=>{FOC[1]=FOC[2]=null;GSEL[1]=GSEL[2]=null;if(e.target.id==='mby'){GPATH=[];RPATH=[]}if(e.target.id==='rw')RPATH=[];drawAll()}));
  if($('#lm'))$('#lm').addEventListener('input',()=>RC.clear());
  drawAll();
+ // ---- all variables in one table, folded by the group levels
+ (function(){if(!Y.grp)return;const T=Y.grp.tree||[],inT=new Set();const walk=g=>{g.m.forEach(i=>inT.add(i))};T.forEach(walk);
+  const rest=[];for(let i=0;i<N;i++)if(!inT.has(i))rest.push(i);
+  const top=T.slice();if(rest.length)top.push({m:rest,k:[],lab:'(not linked to any other variable)'});
+  const root={lab:'Whole model',ch:top,m:[...inT,...rest],k:[]};
+  $('#t-lay').insertAdjacentHTML('beforeend',`<h2>All variables, by group</h2><div class="hint">Every variable, folded by the same group levels as the map. Click ▸ to open a group; a group's rows show how many variables it has, how many changed, its biggest gap at the end and where, its key variables (the fewest variables all its links to the rest pass through) and the most layers inside it. 🔑 marks a group's key variables.</div>
+  <div class="ctl"><input type="text" id="tq" placeholder="find a variable, e.g. FGDP$.IUSA" style="min-width:240px"> <button class="btn" id="tx1">open one level</button> <button class="btn" id="tx0">fold all</button> <button class="btn" id="tcsv">download CSV</button> <span id="tqn" class="hint"></span></div>
+  <div class="tw"><table><thead><tr><th>Group / variable</th><th class="n">Variables</th><th class="n">Changed</th><th class="n">Gap at end</th><th>Biggest gap inside</th><th class="n">Key variables</th><th class="n">Layers</th></tr></thead><tbody id="ttb"></tbody></table></div>`);
+  const ST=new Map(),stat=g=>{if(ST.has(g))return ST.get(g);let ch=0,big=null,bv=-1,lay=0;for(const i of g.m){const n=D.nodes[i],r=ROW[n];if(r)ch++;const gv=gapOf(n);if(gv!=null&&Math.abs(gv)>bv){bv=Math.abs(gv);big=i}if(Y.d[i]>lay)lay=Y.d[i]}const o={ch,big,lay};ST.set(g,o);return o};
+  const kidsOf=g=>g.ch?g.ch:null,NODE=new Map();let seq=0;
+  const idOf=g=>{if(!g.__id){g.__id='n'+(seq++);NODE.set(g.__id,g)}return g.__id};
+  function rowG(g,depth,pid){const st=stat(g),id=idOf(g),bn=st.big!=null?D.nodes[st.big]:null;
+   return `<tr data-id="${id}" data-p="${pid}" data-d="${depth}" class="tg"><td style="padding-left:${6+depth*18}px;white-space:nowrap"><span class="tw_" data-t="${id}" style="cursor:pointer;display:inline-block;width:14px">▸</span><b>${esc(g.lab)}</b></td><td class="n">${g.m.length.toLocaleString()}</td><td class="n">${st.ch.toLocaleString()}</td><td class="n"></td><td class="small">${bn?`${vlink(bn)} <span class="${cls(gapOf(bn))}">${pct(gapOf(bn))}</span>`:'–'}</td><td class="n" title="${esc(g.k.slice(0,20).map(i=>D.nodes[i]).join(', '))}${g.k.length>20?', …':''}">${g.k.length?g.k.length.toLocaleString():'–'}</td><td class="n">${st.lay}</td></tr>`}
+  function rowV(i,depth,pid,keys){const n=D.nodes[i],g=gapOf(n);
+   return `<tr data-p="${pid}" data-d="${depth}" data-v="${esc(n)}"><td style="padding-left:${6+depth*18+14}px">${keys.has(i)?'🔑 ':''}${vlink(n)}</td><td class="n"></td><td class="n">${ROW[n]?'yes':''}</td><td class="n ${cls(g)}">${g==null?'unchanged':pct(g)}</td><td></td><td class="n"></td><td class="n">${Y.d[i]}</td></tr>`}
+  const tb=$('#ttb');
+  function open(id){const g=NODE.get(id),tr=tb.querySelector(`tr[data-id="${id}"]`);if(!g||!tr||tr.dataset.open)return;tr.dataset.open='1';tr.querySelector('.tw_').textContent='▾';
+   const d=+tr.dataset.d+1,ks=g.ch?g.ch:null;let h='';
+   if(ks)h=ks.map(c=>rowG(c,d,id)).join('');
+   else{const keys=new Set(g.k);h=g.m.slice().sort((a,b)=>Math.abs(gapOf(D.nodes[b])||0)-Math.abs(gapOf(D.nodes[a])||0)||(D.nodes[a]<D.nodes[b]?-1:1)).map(i=>rowV(i,d,id,keys)).join('')}
+   tr.insertAdjacentHTML('afterend',h)}
+  function close(id){const tr=tb.querySelector(`tr[data-id="${id}"]`);if(!tr)return;delete tr.dataset.open;tr.querySelector('.tw_').textContent='▸';
+   const kill=[id];for(let x=0;x<kill.length;x++)tb.querySelectorAll(`tr[data-p="${kill[x]}"]`).forEach(r=>{if(r.dataset.id)kill.push(r.dataset.id);r.remove()})}
+  function reset(){tb.innerHTML=(root.ch.length===1&&!root.ch[0].ch?[root]:root.ch).map(g=>rowG(g,0,'root')).join('')}
+  reset();
+  tb.addEventListener('click',e=>{const t=e.target.closest('.tw_');if(!t)return;const tr=t.closest('tr');tr.dataset.open?close(tr.dataset.id):open(tr.dataset.id)});
+  $('#tx0').onclick=reset;
+  $('#tx1').onclick=()=>{const rows=[...tb.querySelectorAll('tr.tg')].filter(r=>!r.dataset.open);if(!rows.length)return;const md=Math.min(...rows.map(r=>+r.dataset.d));rows.filter(r=>+r.dataset.d===md).forEach(r=>open(r.dataset.id))};
+  // find: open the folds down to a variable
+  let PATHS=null;const pathTo=i=>{if(!PATHS){PATHS=new Map();const w=(g,anc)=>{const a=[...anc,g];if(g.ch)g.ch.forEach(c=>w(c,a));else g.m.forEach(v=>PATHS.set(v,a))};root.ch.forEach(g=>w(g,[]))}return PATHS.get(i)};
+  $('#tq').addEventListener('change',()=>{const q=$('#tq').value.trim().toUpperCase();if(!q)return;let i=NI[q];
+   if(i==null){const hit=D.nodes.findIndex(n=>n.includes(q));i=hit<0?null:hit}
+   if(i==null){$('#tqn').textContent='not found';return}const pa=pathTo(i);if(!pa){$('#tqn').textContent='not in the table';return}
+   reset();pa.forEach(g=>open(idOf(g)));const r=tb.querySelector(`tr[data-v="${CSS.escape(D.nodes[i])}"]`);
+   $('#tqn').textContent=pa.map(g=>g.lab).join(' › ');if(r){r.style.background='var(--hl)';r.scrollIntoView({block:'center'})}});
+  // CSV of every variable with its group path
+  $('#tcsv').onclick=()=>{const lines=[],maxd=[0];const w=(g,anc)=>{const a=[...anc,g.lab];if(g.ch)g.ch.forEach(c=>w(c,a));else{const ks=new Set(g.k);g.m.forEach(i=>{const n=D.nodes[i],gv=gapOf(n);if(a.length>maxd[0])maxd[0]=a.length;lines.push([a,n,ROW[n]?1:0,gv==null?'':gv,Y.d[i],ks.has(i)?1:0])})}};
+   root.ch.forEach(g=>w(g,[]));const q=x=>/[",\n]/.test(String(x))?'"'+String(x).replace(/"/g,'""')+'"':String(x);
+   const head=[...Array(maxd[0]).keys()].map(k=>'level '+(k+1)).concat(['variable','changed','gap at end %','layers','key variable of its group']);
+   const csv=[head.map(q).join(',')].concat(lines.map(([a,n,c,g,l,k])=>[...a,...Array(maxd[0]-a.length).fill('')].concat([n,c,g,l,k]).map(q).join(','))).join('\n');
+   const b=new Blob([csv],{type:'text/csv'}),u=URL.createObjectURL(b),x=document.createElement('a');x.href=u;x.download='variables_by_group.csv';document.body.appendChild(x);x.click();x.remove();setTimeout(()=>URL.revokeObjectURL(u),2000)};
+ })();
 })();
 function panZoom(sv,S,btnSel,attr){attr=attr||'lz';if(!sv)return;const set=()=>sv.setAttribute('viewBox',S.v.join(' '));
  const zoomAt=(f,cx,cy)=>{const [x,y,w,h]=S.v,nw=Math.min(S.full[2]*2,Math.max(S.full[2]/40,w*f)),k=nw/w;S.v=[cx-(cx-x)*k,cy-(cy-y)*k,nw,h*k];set()};
