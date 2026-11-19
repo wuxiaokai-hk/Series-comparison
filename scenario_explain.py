@@ -3263,7 +3263,7 @@ def cmd_groups(M, args):
     par = [[idx[p] for p in M.parents.get(n, ()) if p in idx] for n in nodes]
     t = time.time()
     G = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None), boxes=args.map_boxes,
-                       by_geo=getattr(args, 'map_geo', False))
+                       by_geo=getattr(args, 'map_geo', False), desc=(getattr(M, 'desc', None) or {}).get)
     print('Groups in %.1fs, at most %d boxes per view. Key variables = the fewest variables that every link '
           'between the group and the rest of the model passes through.' % (time.time() - t, G['boxes']))
     shown = [0]
@@ -3506,7 +3506,7 @@ def _min_cover(cut):
     return sorted(set(left) - zl) + sorted(zr)
 
 
-def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False):
+def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False, desc=None):
     """Split the equation graph into a tree of groups, so that no view shows more than `boxes` boxes.
     Each split uses Louvain community detection (dense inside, loose links to the rest), with its
     resolution tuned to give 2 .. ~2/3 boxes parts; too many parts are grouped again; a set with no
@@ -3531,22 +3531,67 @@ def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False):
         for v in c:
             order[v] = x
 
-    def label(mem, plab=None):
+    def fam(i):                                                # concept family: geography and numbers removed
+        n = nodes[i]
+        g = geo(n) if geo else ''
+        st = n[:-(len(g) + 1)] if g else n
+        return re.sub(r'\d+$', '', st) or st
+
+    def dfam(i):                                               # the same from the description, if any
+        d = (desc(nodes[i]) if desc else '') or ''
+        g = geo(nodes[i]) if geo else ''
+        if g:
+            d = re.sub(r'[\s,;:(\-]*%s\)?\s*$' % re.escape(g), '', d, flags=re.I)
+        return re.sub(r'\s*\d+\s*$', '', d).strip(' ,;:-')
+
+    def label(mem, pgeo=None):
+        """What is in the group: its main concepts, then its regions, e.g. 'FEMP, FOUT · ICA',
+        'House price index · 13 regions', 'FY · IUSA + 50 regions'. Returns (label, geography part)."""
+        n = len(mem)
+        gpart = ''
         if geo:
             c = Counter(geo(nodes[i]) for i in mem)
-            g, k = c.most_common(1)[0]
-            if g and k >= 0.6 * len(mem) and g != plab:         # inside one region, name by a variable instead
-                return g
-            top3, cov = [], 0                                  # mostly two or three regions: name them
-            for g2, k2 in c.most_common(3):
-                if not g2 or g2 == plab:
-                    break
-                top3.append(g2)
-                cov += k2
-                if cov >= 0.8 * len(mem):
-                    return ' + '.join(top3)
-        top = max(mem, key=lambda i: (len(nbr[i]), nodes[i]))
-        return 'around ' + nodes[top]
+            codes = [g for g in c if g]
+            g1, k1 = c.most_common(1)[0]
+            if g1 and k1 >= 0.6 * n:
+                gpart = g1
+            elif codes:
+                top, cov = [], 0
+                for g2, k2 in c.most_common(3):
+                    if not g2:
+                        break
+                    top.append(g2)
+                    cov += k2
+                    if cov >= 0.8 * n:
+                        break
+                if top and cov >= 0.8 * n:
+                    gpart = ' + '.join(top)
+                else:
+                    big = [g for g, k in c.most_common(1) if g and k >= 0.2 * n]
+                    gpart = ('%s + %d regions' % (big[0], len(codes) - 1)) if big else '%d regions' % len(codes)
+        fc = Counter(fam(i) for i in mem)
+        fams, cov = [], 0
+        for f, k in fc.most_common(3):
+            fams.append(f)
+            cov += k
+            if cov >= 0.7 * n:
+                break
+
+        def fname(f):
+            if desc:
+                ds = Counter(dfam(i) for i in mem if fam(i) == f)
+                d, k = ds.most_common(1)[0]
+                if d and k >= 0.5 * sum(ds.values()):
+                    return d
+            return f
+        if cov >= 0.7 * n:
+            cpart = ', '.join(fname(f) for f in fams)
+        else:
+            cpart = '%d concepts: %s, …' % (len(fc), ', '.join(fname(f) for f in fams[:2]))
+        if len(cpart) > 44:
+            cpart = cpart[:42].rstrip(', ') + '…'
+        show_g = gpart and gpart != pgeo
+        return (cpart + (' · ' + gpart if show_g else '')), gpart
 
     def keys_of(mem):
         ms = set(mem)
@@ -3614,16 +3659,16 @@ def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False):
             parts = chunk(ms, min(maxp, max(2, -(-len(ms) // boxes))))
         return [sorted(m) for m in parts if m]
 
-    def build(members, depth, plab=None):
+    def build(members, depth, pgeo=None):
         out, seen = [], Counter()
         for mem in sorted(split(members), key=lambda m: (-len(m), nodes[m[0]])):
-            lab = label(mem, plab)
+            lab, gp = label(mem, pgeo)
             seen[lab] += 1
-            if lab == plab or seen[lab] > 1:                    # keep names in a view distinct
-                lab = '%s (%s)' % (lab, 'core' if lab == plab and seen[lab] == 1 else 'part %d' % seen[lab])
+            if seen[lab] > 1:                                  # keep names in a view distinct
+                lab = '%s (%d)' % (lab, seen[lab])
             node = {'m': mem, 'k': keys_of(mem), 'lab': lab}
             if len(mem) > boxes and depth < 30 and len(mem) < len(members):
-                node['ch'] = build(mem, depth + 1, plab if plab and label(mem, plab).startswith('around ') else label(mem, plab))
+                node['ch'] = build(mem, depth + 1, gp or pgeo)
             out.append(node)
         return out
 
@@ -3648,7 +3693,7 @@ def compute_groups(nodes, par, geo=None, boxes=40, by_geo=False):
                 mem = sorted(byg[g])
                 node = {'m': mem, 'k': keys_of(mem), 'lab': g or '(no geography)'}
                 if len(mem) > boxes:
-                    node['ch'] = build(mem, 1, node['lab'])
+                    node['ch'] = build(mem, 1, g)
                 return node
             tree = [gnode(g) for g in hubs]
             room = max(2, maxp - len(tree))
@@ -3672,10 +3717,25 @@ def _groups_payload(nodes, M, boxes=40, by_geo=False):
     idx = {n: i for i, n in enumerate(nodes)}
     par = [[idx[p] for p in M.parents.get(n, ()) if p in idx] for n in nodes]
     t = time.time()
-    g = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None), boxes=boxes, by_geo=by_geo)
+    g = compute_groups(nodes, par, geo=(M.geo if getattr(M, 'geo_codes', None) else None), boxes=boxes, by_geo=by_geo,
+                       desc=(getattr(M, 'desc', None) or {}).get)
 
     def depth(ts):
         return 1 + max((depth(x['ch']) for x in ts if x.get('ch')), default=0) if ts else 0
+    # add-factor series that nothing links to: left out of the maps and the table (shown with their variable)
+    used = {u for ps in par for u in ps}
+    sufs = list(getattr(M, 'af_suffixes', None) or ['_A'])
+    names = set(nodes)
+
+    def is_af(n):
+        if n in getattr(M, 'af_series', ()):
+            return True
+        for sf in sufs:
+            bases = ([n[:-len(sf)]] if n.endswith(sf) else []) + [n.replace(sf + sep, sep, 1) for sep in ('.', '_') if sf + sep in n]
+            if any(b and b != n and b in names for b in bases):
+                return True
+        return False
+    g['af'] = [i for i, n in enumerate(nodes) if not par[i] and i not in used and is_af(n)]
     if M.verbose:
         print('Groups: %d top groups, %d levels, at most %d boxes per view, in %.1fs'
               % (len(g['tree']), depth(g['tree']), g['boxes'], time.time() - t), file=sys.stderr)
@@ -5065,7 +5125,7 @@ let KC={};
   $('#mnote1').innerHTML=`${ch.length} step${ch.length===1?'':'s'}${nOther>0?` (${nOther} other ${cur.node.ch?'group':'variable'}${nOther===1?'':'s'} at this level are off the main chain)`:''}. ${cur.prev?`Starts where links from <b>${esc(cur.prevLab)}</b> enter`:'Starts at the heaviest link'}${cur.next?` and ends where links leave for <b>${esc(cur.nextLab)}</b>`:''}. ${kids.some(c=>c.v==null)?'Click a step (▸) to see the chain inside it.':'Double-click a variable for its details.'}`;
   // layout: steps left to right, wrapping, plus the previous and next steps as dashed boxes
   const items=[];if(cur.prev)items.push({k:'prev',lab:cur.prevLab});ch.forEach((x,j)=>items.push({k:'step',x,j}));if(cur.next)items.push({k:'next',lab:cur.nextLab});
-  const BW=180,BH=46,GX=56,GY=34,PER=Math.max(3,Math.floor(((($('#t-lay').clientWidth||1100)-20)+GX)/(BW+GX))),rows=Math.ceil(items.length/PER);
+  const BW=196,BH=46,GX=56,GY=34,PER=Math.max(3,Math.floor(((($('#t-lay').clientWidth||1100)-20)+GX)/(BW+GX))),rows=Math.ceil(items.length/PER);
   const P=items.map((it,i)=>{const r=Math.floor(i/PER),c=r%2?PER-1-(i%PER):i%PER;return {x:10+c*(BW+GX),y:22+r*(BH+GY)}});
   const W_=10+Math.min(items.length,PER)*(BW+GX)-GX+10,H=22+rows*(BH+GY)-GY+12;
   const gapCol=g=>{if(g==null)return'var(--card)';const t=Math.min(1,Math.abs(g)/3);return g<0?`rgba(217,45,32,${.12+.55*t})`:`rgba(15,157,88,${.12+.55*t})`};
@@ -5076,7 +5136,7 @@ let KC={};
    if(it.k!=='step'){nd+=`<g><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--bg,#fff)" stroke="var(--mut)" stroke-dasharray="5 4"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">${it.k==='prev'?'from the step before':'on to the next step'}</text><text x="${p.x+8}" y="${p.y+34}" font-size="11.5" fill="var(--fg)">${esc(it.lab.length>24?it.lab.slice(0,23)+'…':it.lab)}</text></g>`;return}
    const c=kids[it.x];
    if(c.v!=null){const n=D.nodes[c.v],g=gapOf(n);nd+=`<g class="rv" data-n="${esc(n)}" style="cursor:pointer"><title>${esc(n)}${g!=null?`: gap ${pct(g)}`:': unchanged'}. Double-click for details.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="var(--bg,#fff)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="7" fill="${gapCol(g)}" stroke="var(--fg)" stroke-opacity=".5"/><text x="${p.x+8}" y="${p.y+18}" font-size="10.5" fill="var(--mut)">step ${it.j+1}</text><text x="${p.x+8}" y="${p.y+35}" font-size="12" font-weight="600" fill="var(--fg)">${esc(n.length>23?n.slice(0,22)+'…':n)}${g!=null?` <tspan font-weight="400" font-size="11">${pct(g)}</tspan>`:''}</text></g>`}
-   else{const chn=c.m.filter(i=>ROW[D.nodes[i]]).length,more=!!(c.ch||c.m.length>1);nd+=`<g class="rg" data-j="${it.j}" style="cursor:pointer"><title>${esc(c.lab)}: ${c.m.length} variables (${chn} changed)${c.k?`, joined to the rest through ${c.k.length} key variable${c.k.length===1?'':'s'}`:''}. Click to see the chain inside it.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--card)" stroke="var(--a)" stroke-width="1.6"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">step ${it.j+1}${more?' ▸':''}</text><text x="${p.x+8}" y="${p.y+34}" font-size="12" font-weight="600" fill="var(--fg)">${esc(c.lab.length>17?c.lab.slice(0,16)+'…':c.lab)} · ${c.m.length.toLocaleString()}</text></g>`}});
+   else{const chn=c.m.filter(i=>ROW[D.nodes[i]]).length,more=!!(c.ch||c.m.length>1);nd+=`<g class="rg" data-j="${it.j}" style="cursor:pointer"><title>${esc(c.lab)}: ${c.m.length} variables (${chn} changed)${c.k?`, joined to the rest through ${c.k.length} key variable${c.k.length===1?'':'s'}`:''}. Click to see the chain inside it.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="9" fill="var(--card)" stroke="var(--a)" stroke-width="1.6"/><text x="${p.x+8}" y="${p.y+17}" font-size="10.5" fill="var(--mut)">step ${it.j+1} · ${c.m.length.toLocaleString()} vars${more?' ▸':''}</text><text x="${p.x+8}" y="${p.y+34}" font-size="11.5" font-weight="600" fill="var(--fg)">${esc(c.lab.length>25?c.lab.slice(0,24)+'…':c.lab)}</text></g>`}});
   const S=LVS[1];S.full=[0,0,W_,H];S.v=S.full.slice();
   $('#lmap1').innerHTML=`<svg id="lsvg1" viewBox="${S.v.join(' ')}" style="width:${Math.min(($('#t-lay').clientWidth||1100),W_)}px;max-width:100%;height:${Math.round(Math.min(700,H*Math.min(1,(($('#t-lay').clientWidth||1100))/W_)))}px;border:1px solid var(--line);border-radius:10px;cursor:grab;touch-action:none"><defs><marker id="rt" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="var(--a)"/></marker></defs>${ed}${nd}</svg>`;
   const sv=$('#lsvg1');panZoom(sv,S,'[data-lz1]','lz1');
@@ -5090,23 +5150,24 @@ let KC={};
  // ---- all variables in one map, folded level by level; click a group to unfold it in place
  const FOLD=new Set();let FTOP=null,FPATH=null;
  function foldTree(){if(FTOP)return FTOP;const T=Y.grp?(Y.grp.tree||[]):[],inT=new Set();T.forEach(g=>g.m.forEach(i=>inT.add(i)));
-  const rest=[];for(let i=0;i<N;i++)if(!inT.has(i))rest.push(i);FTOP=T.slice();if(rest.length)FTOP.push({m:rest,k:[],lab:'(not linked)'});
+  const rest=[];const AFS=new Set((Y.grp&&Y.grp.af)||[]);for(let i=0;i<N;i++)if(!inT.has(i)&&!AFS.has(i))rest.push(i);FTOP=T.slice();if(rest.length)FTOP.push({m:rest,k:[],lab:'(not linked)'});
   let id=0;const par=new Map();const w=(g,top,up)=>{g.__f=g.__f||('f'+(id++));g.__top=top;par.set(g,up);(g.ch||[]).forEach(c=>w(c,top,g))};FTOP.forEach((g,x)=>w(g,x,null));
   FPATH=new Map();const pv=(g,anc)=>{const a=[...anc,g];if(g.ch)g.ch.forEach(c=>pv(c,a));else g.m.forEach(v=>FPATH.set(v,a))};FTOP.forEach(g=>pv(g,[]));FTOP.par=par;return FTOP}
  function foldOf(g){FOLD.delete(g);(g.ch||[]).forEach(foldOf)}
  function drawFoldTo(el,FS,sid,S,main){const top=foldTree();
   // what each variable is shown as: its outermost folded group, or itself
   const disp=new Map(),items=new Map();
-  for(let i=0;i<N;i++){const pa=FPATH.get(i);let d=null;if(pa){for(const g of pa){if(!FS.has(g)){d=g;break}}}const key=d?d.__f:'v'+i;disp.set(i,key);if(!items.has(key))items.set(key,d?{g:d}:{v:i,top:pa?pa[0].__top:-1,parent:pa?pa[pa.length-1]:null})}
+  const AFG=new Set((Y.grp&&Y.grp.af)||[]);
+  for(let i=0;i<N;i++){if(AFG.has(i))continue;const pa=FPATH.get(i);let d=null;if(pa){for(const g of pa){if(!FS.has(g)){d=g;break}}}const key=d?d.__f:'v'+i;disp.set(i,key);if(!items.has(key))items.set(key,d?{g:d}:{v:i,top:pa?pa[0].__top:-1,parent:pa?pa[pa.length-1]:null})}
   const ids=[...items.keys()],cnt=new Map();
-  for(let v=0;v<N;v++){const dv=disp.get(v);for(const u of D.par[v]){const du=disp.get(u);if(du===dv)continue;const k=du+'|'+dv;cnt.set(k,(cnt.get(k)||0)+1)}}
+  for(let v=0;v<N;v++){const dv=disp.get(v);if(dv==null)continue;for(const u of D.par[v]){const du=disp.get(u);if(du==null||du===dv)continue;const k=du+'|'+dv;cnt.set(k,(cnt.get(k)||0)+1)}}
   const edges=[...cnt.keys()].map(x=>x.split('|'));const col=layerCols(ids,edges);
   const cols=new Map();ids.forEach(d=>{const c=col.get(d);if(!cols.has(c))cols.set(c,[]);cols.get(c).push(d)});
   const topOf=d=>{const it=items.get(d);return it.g?it.g.__top:it.top};
   const cks=[...cols.keys()].sort((a,b)=>a-b),pos=new Map();cks.forEach(c=>{cols.get(c).sort((a,b)=>topOf(a)-topOf(b));cols.get(c).forEach((d,r)=>pos.set(d,r))});
   const pin=new Map();edges.forEach(([u,v])=>{if(!pin.has(v))pin.set(v,[]);pin.get(v).push(u)});
   for(let sw=0;sw<3;sw++)cks.forEach((c,j)=>{if(!j)return;const a=cols.get(c);a.sort((x,y)=>{const m=z=>{const ps=pin.get(z)||[];return ps.length?ps.reduce((s,p)=>s+pos.get(p),0)/ps.length:1e9};return (m(x)-m(y))||(topOf(x)-topOf(y))});a.forEach((d,r)=>pos.set(d,r))});
-  const BW=172,BH=28,GH=42,GX=70,SX=12,GY=9,R=Math.max(12,Math.min(36,Math.ceil(Math.sqrt(ids.length)*1.5))),hOf=d=>items.get(d).g?GH:BH;
+  const BW=196,BH=28,GH=42,GX=70,SX=12,GY=9,R=Math.max(12,Math.min(36,Math.ceil(Math.sqrt(ids.length)*1.5))),hOf=d=>items.get(d).g?GH:BH;
   const nsub=new Map(),x0=new Map();let xc=10;cks.forEach(c=>{nsub.set(c,Math.max(1,Math.ceil(cols.get(c).length/R)));x0.set(c,xc);xc+=nsub.get(c)*(BW+SX)-SX+GX});
   const P=new Map();let H=0;cks.forEach(c=>{const a=cols.get(c),rk=Math.ceil(a.length/nsub.get(c)),y=[...Array(nsub.get(c))].map(()=>12);a.forEach((d,r)=>{const sc=Math.floor(r/rk);P.set(d,{x:x0.get(c)+sc*(BW+SX),y:y[sc]});y[sc]+=hOf(d)+GY;H=Math.max(H,y[sc])})});
   const W=xc-GX+20,hue=t=>t<0?'var(--mut)':`hsl(${(t*67)%360},62%,48%)`;
@@ -5116,7 +5177,7 @@ let KC={};
    ed+=`<path d="${d}" fill="none" stroke="var(--mut)" stroke-opacity="${EO}" stroke-width="${Math.min(5,1+Math.log2(c))}" marker-end="url(#lf${sid})" data-e="${u},${v}"><title>${c} link${c>1?'s':''}</title></path>`});
   let nd='';ids.forEach(d=>{const p=P.get(d),it=items.get(d),stripe=`<rect x="${p.x}" y="${p.y}" width="5" height="${hOf(d)}" rx="2" fill="${hue(topOf(d))}"/>`;
    if(it.g){const g=it.g,ch=g.m.filter(i=>ROW[D.nodes[i]]).length,can=!!(g.ch||g.m.length>1);
-    nd+=`<g class="fg" data-f="${g.__f}" style="cursor:${can?'pointer':'default'}"><title>${esc(g.lab)}: ${g.m.length} variables (${ch} changed)${g.k.length?`, joined to the rest through ${g.k.length} key variable${g.k.length===1?'':'s'}`:''}. Click to unfold.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="8" fill="var(--card)" stroke="var(--mut)" stroke-opacity=".7"/>${stripe}<text x="${p.x+11}" y="${p.y+16}" font-size="11.5" font-weight="600" fill="var(--fg)">${esc(g.lab.length>19?g.lab.slice(0,18)+'…':g.lab)} · ${g.m.length.toLocaleString()}</text><text x="${p.x+11}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${ch.toLocaleString()} changed${can?' · ▸ unfold':''}</text></g>`}
+    nd+=`<g class="fg" data-f="${g.__f}" style="cursor:${can?'pointer':'default'}"><title>${esc(g.lab)}: ${g.m.length} variables (${ch} changed)${g.k.length?`, joined to the rest through ${g.k.length} key variable${g.k.length===1?'':'s'}`:''}. Click to unfold.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${GH}" rx="8" fill="var(--card)" stroke="var(--mut)" stroke-opacity=".7"/>${stripe}<text x="${p.x+11}" y="${p.y+16}" font-size="11" font-weight="600" fill="var(--fg)">${esc(g.lab.length>27?g.lab.slice(0,26)+'…':g.lab)}</text><text x="${p.x+11}" y="${p.y+32}" font-size="10.5" fill="var(--mut)">${g.m.length.toLocaleString()} vars · ${ch.toLocaleString()} changed${can?' · ▸':''}</text></g>`}
    else{const n=D.nodes[it.v],g=gapOf(n),key=it.parent&&it.parent.k&&it.parent.k.includes(it.v);
     nd+=`<g class="fv" data-n="${esc(n)}" data-i="${d}" style="cursor:pointer"><title>${esc(n)}${g!=null?`: gap ${pct(g)}`:': unchanged'}${it.parent?` (in ${it.parent.lab})`:''}${key?', key variable of its group':''}. Double-click for details.</title><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="var(--bg,#fff)"/><rect x="${p.x}" y="${p.y}" width="${BW}" height="${BH}" rx="5" fill="${gapCol(g)}" stroke="var(--line)"/>${stripe}<text x="${p.x+11}" y="${p.y+18}" font-size="11" fill="var(--fg)">${key?'🔑 ':''}${esc(n.length>20?n.slice(0,19)+'…':n)}</text></g>`}});
   if(!S.full||S.full[2]!==W||S.full[3]!==H+10){S.full=[0,0,W,H+10];S.v=S.full.slice()}
@@ -5130,7 +5191,7 @@ let KC={};
   sv.addEventListener('dblclick',e=>{const g=e.target.closest('.fv');if(g)show(g.dataset.n)});
   const open=[...FS].filter(g=>![...(g.ch||[])].some(c=>FOLD.has(c)));   // the deepest unfolded groups
   $('#mf1').innerHTML=open.length?`Unfolded: ${open.slice(0,12).map(g=>`<span class="badge" style="cursor:pointer;border-left:4px solid ${hue(g.__top)}" data-ff="${g.__f}" title="fold back">${esc(g.lab)} ✕</span>`).join(' ')}${open.length>12?` … and ${open.length-12} more`:''}`:'';
-  $('#mnote1').textContent=`${ids.length.toLocaleString()} boxes: ${(ids.length-nv).toLocaleString()} folded groups and ${nv.toLocaleString()} single variables, covering all ${N.toLocaleString()} variables. ${ids.length>400?'That is a lot of boxes; fold some groups back to keep it readable. ':''}Click a group to unfold it here; arrow width = number of links between what is shown.`;
+  $('#mnote1').textContent=`${ids.length.toLocaleString()} boxes: ${(ids.length-nv).toLocaleString()} folded groups and ${nv.toLocaleString()} single variables, covering all ${(N-((Y.grp&&Y.grp.af)||[]).length).toLocaleString()} variables${((Y.grp&&Y.grp.af)||[]).length?` (${(Y.grp.af).length} add-factor series are shown with their variables, not as boxes)`:''}. ${ids.length>400?'That is a lot of boxes; fold some groups back to keep it readable. ':''}Click a group to unfold it here; arrow width = number of links between what is shown.`;
   $('#mf1').onclick=e=>{const c=e.target.closest('[data-ff]');if(!c)return;foldOf(byF.get(c.dataset.ff));LVS[1].full=null;drawAll()};return {boxes:ids.length,nv}}
  const LVF={};let FINIT=false;
  function drawFold(){const top=foldTree();showSlots(1);$('#mch1').innerHTML='';$('#mh1').textContent='All variables';
@@ -5142,7 +5203,7 @@ let KC={};
   let h='';for(let d=1;d<=maxd;d++)h+=`<h3 style="margin:18px 0 4px">Level ${d}</h3><div class="hint" id="flvn${d}"></div><div id="flv${d}"></div>`;box.innerHTML=h;
   for(let d=1;d<=maxd;d++){const FS=new Set([...dep.keys()].filter(g=>dep.get(g)<d&&g.lab!=='(not linked)'&&(g.ch||g.m.length>1)));
    // count boxes first
-   const cnt=new Set();for(let i=0;i<N;i++){const pa=FPATH.get(i);let k='v'+i;if(pa)for(const g of pa){if(!FS.has(g)){k=g.__f;break}}cnt.add(k)}
+   const cnt=new Set(),AFL=new Set((Y.grp&&Y.grp.af)||[]);for(let i=0;i<N;i++){if(AFL.has(i))continue;const pa=FPATH.get(i);let k='v'+i;if(pa)for(const g of pa){if(!FS.has(g)){k=g.__f;break}}cnt.add(k)}
    if(cnt.size>500){$('#flvn'+d).textContent=`${cnt.size.toLocaleString()} boxes at this level: too many to draw. Use the map above and unfold step by step.`;for(let e=d+1;e<=maxd;e++){const x=$('#flvn'+e);if(x){x.previousElementSibling.remove();x.nextElementSibling.remove();x.remove()}}break}
    LVF[d]=LVF[d]||{};const r=drawFoldTo($('#flv'+d),FS,'lsvgf'+d,LVF[d],false);
    $('#flvn'+d).textContent=`${r.boxes.toLocaleString()} boxes (${(r.boxes-r.nv).toLocaleString()} groups, ${r.nv.toLocaleString()} single variables).`}}
@@ -5176,7 +5237,7 @@ let KC={};
  drawAll();
  // ---- all variables in one table, folded by the group levels
  (function(){if(!Y.grp)return;const T=Y.grp.tree||[],inT=new Set();const walk=g=>{g.m.forEach(i=>inT.add(i))};T.forEach(walk);
-  const rest=[];for(let i=0;i<N;i++)if(!inT.has(i))rest.push(i);
+  const rest=[];const AFS=new Set((Y.grp&&Y.grp.af)||[]);for(let i=0;i<N;i++)if(!inT.has(i)&&!AFS.has(i))rest.push(i);
   const top=T.slice();if(rest.length)top.push({m:rest,k:[],lab:'(not linked to any other variable)'});
   const root={lab:'Whole model',ch:top,m:[...inT,...rest],k:[]};
   $('#t-lay').insertAdjacentHTML('beforeend',`<h2>All variables, by group</h2><div class="hint">Every variable, folded by the same group levels as the map. Click ▸ to open a group; a group's rows show how many variables it has, how many changed, its biggest gap at the end and where, its key variables (the fewest variables all its links to the rest pass through) and the most layers inside it. 🔑 marks a group's key variables.</div>
